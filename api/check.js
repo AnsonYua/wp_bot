@@ -135,25 +135,40 @@ async function sendTelegram(message) {
   }
 }
 
-function alertMessage(result) {
+function telegramMessage(result) {
+  const hasEdge = result.bet !== "NONE";
   const edge = result.bet === "BUY_YES" ? result.yesEdge : result.noEdge;
   const price = result.bet === "BUY_YES" ? result.yesPrice : result.noPrice;
   const model = result.bet === "BUY_YES" ? result.yesProb : result.noProb;
 
-  return [
-    "Weather edge found",
+  const lines = [
+    hasEdge ? "Weather edge found" : "Weather check",
     "",
     `Date: ${result.date}`,
     `HKO prediction: highest temperature ${result.forecastMax}°C`,
-    `Bet: ${result.bet.replace("_", " ")} ${result.forecastMax}°C`,
-    `Market price: ${price}`,
-    `Model probability: ${model}`,
-    `Edge: ${edge}`,
-    "",
+    `Yes price: ${result.yesPrice}`,
+    `No price: ${result.noPrice}`,
+    `Model Yes: ${result.yesProb}`,
+    `Model No: ${result.noProb}`,
     `Yes edge: ${result.yesEdge}`,
     `No edge: ${result.noEdge}`,
+    `Bet: ${hasEdge ? result.bet.replace("_", " ") : "NONE"}`
+  ];
+
+  if (hasEdge) {
+    lines.push(
+      `Market price: ${price}`,
+      `Model probability: ${model}`,
+      `Edge: ${edge}`
+    );
+  }
+
+  lines.push(
+    "",
     `Market: https://polymarket.com/event/${result.eventSlug}`
-  ].join("\n");
+  );
+
+  return lines.join("\n");
 }
 
 export default async function handler(req, res) {
@@ -238,8 +253,8 @@ export default async function handler(req, res) {
       eventSlug: slug
     };
 
-    if (bet !== "NONE" && !dryRun) {
-      await sendTelegram(alertMessage(result));
+    if (!dryRun) {
+      await sendTelegram(telegramMessage(result));
       result.alert = true;
     }
 
