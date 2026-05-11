@@ -1,0 +1,105 @@
+{
+  "description": "Monthly baseline for exact integer temperature matching using HKO 22:00 forecast dataset. yes_probability = P(HKO forecast max integer equals HKO actual max integer). no_probability = 1 - yes_probability.",
+  "source_csv": "/Users/hello/Desktop/weatherBot/weatherData/processor/forecast_actual_22h.csv",
+  "cutoff_time_hkt": "22:00",
+  "actual_rule": "int(actual_max_temperature_c), no rounding up",
+  "forecast_rule": "int(forecast_max_temperature_c)",
+  "months": {
+    "01": {
+      "month": "01",
+      "sample_count": 155,
+      "exact_yes_correct": 52,
+      "exact_no_correct": 103,
+      "yes_probability": 0.335484,
+      "no_probability": 0.664516
+    },
+    "02": {
+      "month": "02",
+      "sample_count": 141,
+      "exact_yes_correct": 41,
+      "exact_no_correct": 100,
+      "yes_probability": 0.29078,
+      "no_probability": 0.70922
+    },
+    "03": {
+      "month": "03",
+      "sample_count": 155,
+      "exact_yes_correct": 47,
+      "exact_no_correct": 108,
+      "yes_probability": 0.303226,
+      "no_probability": 0.696774
+    },
+    "04": {
+      "month": "04",
+      "sample_count": 137,
+      "exact_yes_correct": 29,
+      "exact_no_correct": 108,
+      "yes_probability": 0.211679,
+      "no_probability": 0.788321
+    },
+    "05": {
+      "month": "05",
+      "sample_count": 155,
+      "exact_yes_correct": 51,
+      "exact_no_correct": 104,
+      "yes_probability": 0.329032,
+      "no_probability": 0.670968
+    },
+    "06": {
+      "month": "06",
+      "sample_count": 150,
+      "exact_yes_correct": 49,
+      "exact_no_correct": 101,
+      "yes_probability": 0.326667,
+      "no_probability": 0.673333
+    },
+    "07": {
+      "month": "07",
+      "sample_count": 155,
+      "exact_yes_correct": 59,
+      "exact_no_correct": 96,
+      "yes_probability": 0.380645,
+      "no_probability": 0.619355
+    },
+    "08": {
+      "month": "08",
+      "sample_count": 155,
+      "exact_yes_correct": 54,
+      "exact_no_correct": 101,
+      "yes_probability": 0.348387,
+      "no_probability": 0.651613
+    },
+    "09": {
+      "month": "09",
+      "sample_count": 150,
+      "exact_yes_correct": 44,
+      "exact_no_correct": 106,
+      "yes_probability": 0.293333,
+      "no_probability": 0.706667
+    },
+    "10": {
+      "month": "10",
+      "sample_count": 155,
+      "exact_yes_correct": 60,
+      "exact_no_correct": 95,
+      "yes_probability": 0.387097,
+      "no_probability": 0.612903
+    },
+    "11": {
+      "month": "11",
+      "sample_count": 150,
+      "exact_yes_correct": 61,
+      "exact_no_correct": 89,
+      "yes_probability": 0.406667,
+      "no_probability": 0.593333
+    },
+    "12": {
+      "month": "12",
+      "sample_count": 155,
+      "exact_yes_correct": 57,
+      "exact_no_correct": 98,
+      "yes_probability": 0.367742,
+      "no_probability": 0.632258
+    }
+  }
+}
