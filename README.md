@@ -23,6 +23,14 @@ Example:
 /api/check?secret=YOUR_CRON_SECRET&dryRun=1&date=2026-05-12
 ```
 
+Manual cache overwrite:
+
+```text
+GET /api/cache?secret=YOUR_CRON_SECRET&date=2026-05-12&max=30&min=24&hkoUpdateTime=2026-05-11T16%3A30%3A00%2B08%3A00
+```
+
+Use this only when you missed the previous-day HKO forecast cache.
+
 ## Logic
 
 1. Fetch HKO 9-day forecast.
