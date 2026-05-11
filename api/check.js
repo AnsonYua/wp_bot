@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { list, put } from "@vercel/blob";
 
 const baseline = JSON.parse(
   readFileSync(new URL("../monthly_exact_baseline.json", import.meta.url), "utf8")
@@ -7,6 +8,7 @@ const baseline = JSON.parse(
 const HKO_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=en";
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 const CLOB_BASE = "https://clob.polymarket.com";
+const HKO_CACHE_PATH = "hko-cache/latest.json";
 
 const MONTH_NAMES = [
   "january",
@@ -43,10 +45,13 @@ function isAuthorized(req, query) {
 }
 
 function tomorrowHkt() {
-  const now = new Date();
-  const hkt = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Hong_Kong" }));
+  const hkt = nowHkt();
   hkt.setDate(hkt.getDate() + 1);
   return formatDate(hkt);
+}
+
+function nowHkt() {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Hong_Kong" }));
 }
 
 function formatDate(date) {
@@ -89,6 +94,103 @@ async function fetchJson(url, options = {}) {
 function findForecast(hko, dateText) {
   const target = yyyymmdd(dateText);
   return hko.weatherForecast?.find((item) => item.forecastDate === target);
+}
+
+function forecastCachePayload(dateText, hko, forecast) {
+  return {
+    activeTargetDate: dateText,
+    forecastMax: Number(forecast.forecastMaxtemp?.value),
+    forecastMin: Number(forecast.forecastMintemp?.value),
+    forecastWeather: forecast.forecastWeather || "",
+    rainProbability: forecast.PSR || "",
+    hkoUpdateTime: hko.updateTime || "",
+    cachedAt: new Date().toISOString(),
+    source: "hko_fnd_api"
+  };
+}
+
+async function saveForecastCache(payload) {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    return { saved: false, reason: "blob_token_missing" };
+  }
+  const blob = await put(HKO_CACHE_PATH, JSON.stringify(payload, null, 2), {
+    access: "public",
+    contentType: "application/json",
+    addRandomSuffix: false,
+    allowOverwrite: true
+  });
+  return { saved: true, url: blob.url };
+}
+
+async function readForecastCache() {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error("Missing BLOB_READ_WRITE_TOKEN");
+  }
+  const result = await list({ prefix: HKO_CACHE_PATH, limit: 1 });
+  const blob = result.blobs.find((item) => item.pathname === HKO_CACHE_PATH);
+  if (!blob) {
+    throw new Error("Forecast cache not found");
+  }
+  const response = await fetch(blob.url, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Forecast cache not found: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+async function getForecastForCheck(queryDate) {
+  const hkt = nowHkt();
+  const currentHour = hkt.getHours();
+  const today = formatDate(hkt);
+  const shouldUseCache = !queryDate && currentHour < 16;
+
+  if (shouldUseCache) {
+    try {
+      const cached = await readForecastCache();
+      if (cached.activeTargetDate !== today) {
+        throw new Error(`Cached forecast is stale: ${cached.activeTargetDate}, expected ${today}`);
+      }
+      return {
+        date: cached.activeTargetDate,
+        forecastMax: Number(cached.forecastMax),
+        forecastSource: "blob_cache",
+        hkoUpdateTime: cached.hkoUpdateTime,
+        cache: { used: true, saved: false }
+      };
+    } catch (error) {
+      const fallback = await getLiveForecast(today);
+      return {
+        ...fallback,
+        forecastSource: "hko_live_cache_fallback",
+        cache: {
+          ...fallback.cache,
+          used: false,
+          fallbackReason: error.message
+        }
+      };
+    }
+  }
+
+  const date = queryDate || tomorrowHkt();
+  return getLiveForecast(date);
+}
+
+async function getLiveForecast(date) {
+  const hko = await fetchJson(HKO_URL);
+  const forecast = findForecast(hko, date);
+  if (!forecast) {
+    return { error: "hko_forecast_not_found", date };
+  }
+
+  const cachePayload = forecastCachePayload(date, hko, forecast);
+  const cache = await saveForecastCache(cachePayload);
+  return {
+    date,
+    forecastMax: cachePayload.forecastMax,
+    forecastSource: "hko_live",
+    hkoUpdateTime: hko.updateTime || "",
+    cache: { used: false, ...cache }
+  };
 }
 
 function findExactMarket(event, forecastMax, dateText) {
@@ -177,18 +279,17 @@ export default async function handler(req, res) {
     return json(res, 401, { error: "unauthorized" });
   }
 
-  const date = query.get("date") || tomorrowHkt();
+  const queryDate = query.get("date");
   const dryRun = query.get("dryRun") === "1";
   const edgeThreshold = Number(process.env.EDGE_THRESHOLD || "0.10");
 
   try {
-    const hko = await fetchJson(HKO_URL);
-    const forecast = findForecast(hko, date);
-    if (!forecast) {
-      return json(res, 404, { error: "hko_forecast_not_found", date });
+    const forecastInfo = await getForecastForCheck(queryDate);
+    if (forecastInfo.error) {
+      return json(res, 404, forecastInfo);
     }
 
-    const forecastMax = Number(forecast.forecastMaxtemp?.value);
+    const { date, forecastMax, forecastSource, hkoUpdateTime, cache } = forecastInfo;
     const month = date.slice(5, 7);
     const monthBaseline = baseline.months?.[month];
     if (!monthBaseline) {
@@ -202,6 +303,7 @@ export default async function handler(req, res) {
       return json(res, 200, {
         date,
         forecastMax,
+        forecastSource,
         bet: "NONE",
         alert: false,
         reason: "exact_market_not_found"
@@ -213,6 +315,7 @@ export default async function handler(req, res) {
       return json(res, 200, {
         date,
         forecastMax,
+        forecastSource,
         bet: "NONE",
         alert: false,
         reason: "clob_token_ids_missing"
@@ -250,7 +353,10 @@ export default async function handler(req, res) {
       noEdge,
       bet,
       alert: false,
-      eventSlug: slug
+      eventSlug: slug,
+      forecastSource,
+      hkoUpdateTime,
+      cache
     };
 
     if (!dryRun) {
