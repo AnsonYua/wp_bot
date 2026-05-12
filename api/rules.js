@@ -1,6 +1,7 @@
 import { list, put } from "@vercel/blob";
 
 const SELL_RULES_PATH = "trade-rules/sell-rules.json";
+const SELL_LOG_PATH = "trade-rules/sell-log.json";
 
 function json(res, status, body) {
   res.statusCode = status;
@@ -41,6 +42,21 @@ async function readRules() {
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Rules read failed: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+async function readBlobJson(path, fallback) {
+  const result = await list({ prefix: path, limit: 1 });
+  const blob = result.blobs.find((item) => item.pathname === path);
+  if (!blob) {
+    return fallback;
+  }
+
+  const url = `${blob.url}${blob.url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Blob read failed: HTTP ${response.status}`);
   }
   return response.json();
 }
@@ -88,6 +104,9 @@ export default async function handler(req, res) {
 
   try {
     if (req.method === "GET") {
+      if (query.get("log") === "1") {
+        return json(res, 200, await readBlobJson(SELL_LOG_PATH, { entries: [] }));
+      }
       return json(res, 200, await readRules());
     }
 

@@ -17,6 +17,8 @@ const CLOB_BASE = "https://clob.polymarket.com";
 const DATA_API_BASE = "https://data-api.polymarket.com";
 const HKO_CACHE_PATH = "hko-cache/latest.json";
 const SELL_RULES_PATH = "trade-rules/sell-rules.json";
+const SELL_LOG_PATH = "trade-rules/sell-log.json";
+const MAX_SELL_LOG_ENTRIES = 200;
 const PENDING_RULE_TIMEOUT_MS = 5 * 60 * 1000;
 const APP_VERSION = "2026-05-13-auto-sell-v1";
 
@@ -388,6 +390,42 @@ async function writeSellRules(payload) {
   });
 }
 
+async function appendSellLog(entries) {
+  const newEntries = entries.filter((entry) => entry.status !== "skipped" || entry.reason !== "target_not_reached");
+  if (!newEntries.length || !process.env.BLOB_READ_WRITE_TOKEN) return;
+
+  let current = { entries: [] };
+  try {
+    const result = await list({ prefix: SELL_LOG_PATH, limit: 1 });
+    const blob = result.blobs.find((item) => item.pathname === SELL_LOG_PATH);
+    if (blob) {
+      const url = `${blob.url}${blob.url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+      const response = await fetch(url, { cache: "no-store" });
+      if (response.ok) {
+        current = await response.json();
+      }
+    }
+  } catch {
+    current = { entries: [] };
+  }
+
+  const oldEntries = Array.isArray(current.entries) ? current.entries : [];
+  const entriesWithTime = newEntries.map((entry) => ({
+    ...entry,
+    checkedAtHkt: formatDateTimeHkt(new Date())
+  }));
+  const payload = {
+    entries: [...entriesWithTime, ...oldEntries].slice(0, MAX_SELL_LOG_ENTRIES)
+  };
+
+  await put(SELL_LOG_PATH, JSON.stringify(payload, null, 2), {
+    access: "public",
+    contentType: "application/json",
+    addRandomSuffix: false,
+    allowOverwrite: true
+  });
+}
+
 async function markRulePending(ruleId) {
   if (!ruleId) return null;
 
@@ -669,6 +707,8 @@ async function runAutoSellRules({ dryRun }) {
       }
     }
   }
+
+  await appendSellLog(actions);
 
   return {
     enabled: liveTrading,

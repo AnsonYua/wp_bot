@@ -90,6 +90,12 @@ POST /api/rules?secret=YOUR_CRON_SECRET
 
 The body can be one rule object or `{ "rules": [...] }`.
 
+Read recent auto-sell log:
+
+```text
+GET /api/rules?secret=YOUR_CRON_SECRET&log=1
+```
+
 ## Environment Variables
 
 Set these in Vercel:
