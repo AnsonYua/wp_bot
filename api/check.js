@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { list, put } from "@vercel/blob";
 import { Chain, ClobClient, OrderType, Side } from "@polymarket/clob-client-v2";
 import { Wallet } from "ethers";
@@ -316,6 +317,10 @@ function round6(value) {
   return Math.round(value * 1_000_000) / 1_000_000;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function sendTelegram(message) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -338,7 +343,7 @@ async function sendTelegram(message) {
   }
 }
 
-async function readSellRules() {
+async function readSellRules({ createIfMissing = true } = {}) {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     return { rules: [], available: false, reason: "blob_token_missing" };
   }
@@ -347,8 +352,11 @@ async function readSellRules() {
   const blob = result.blobs.find((item) => item.pathname === SELL_RULES_PATH);
   if (!blob) {
     const emptyRules = { rules: [] };
-    await writeSellRules(emptyRules);
-    return { ...emptyRules, available: true, created: true };
+    if (createIfMissing) {
+      await writeSellRules(emptyRules);
+      return { ...emptyRules, available: true, created: true };
+    }
+    return { ...emptyRules, available: true, created: false, missing: true };
   }
 
   const cacheBustedUrl = `${blob.url}${blob.url.includes("?") ? "&" : "?"}t=${Date.now()}`;
@@ -369,6 +377,45 @@ async function writeSellRules(payload) {
     addRandomSuffix: false,
     allowOverwrite: true
   });
+}
+
+async function markRulePending(ruleId) {
+  if (!ruleId) return null;
+
+  const latest = await readSellRules();
+  const rules = Array.isArray(latest.rules) ? latest.rules : [];
+  const rule = rules.find((item) => item.id === ruleId);
+  if (!rule || !rule.enabled || rule.executed || rule.pending) {
+    return null;
+  }
+
+  const pendingId = randomUUID();
+  rule.pending = true;
+  rule.pendingId = pendingId;
+  rule.pendingAt = formatDateTimeHkt(new Date());
+  await writeSellRules({ ...latest, rules });
+
+  // Vercel Blob has no compare-and-set write. Re-read after a short delay so
+  // overlapping scheduler calls do not both proceed after racing the same rule.
+  await sleep(750);
+  const verify = await readSellRules({ createIfMissing: false });
+  const verifiedRule = (verify.rules || []).find((item) => item.id === ruleId);
+  if (!verifiedRule || verifiedRule.executed || verifiedRule.pendingId !== pendingId) {
+    return null;
+  }
+
+  return pendingId;
+}
+
+async function updateSellRule(ruleId, updates) {
+  const latest = await readSellRules();
+  const rules = Array.isArray(latest.rules) ? latest.rules : [];
+  const rule = rules.find((item) => item.id === ruleId);
+  if (!rule) return false;
+
+  Object.assign(rule, updates);
+  await writeSellRules({ ...latest, rules });
+  return true;
 }
 
 function ruleMatchesMarket(market, rule) {
@@ -472,14 +519,13 @@ function tradeMessage(action) {
 }
 
 async function runAutoSellRules({ dryRun }) {
-  const rulesPayload = await readSellRules();
+  const rulesPayload = await readSellRules({ createIfMissing: !dryRun });
   const rules = Array.isArray(rulesPayload.rules) ? rulesPayload.rules : [];
   const actions = [];
   const liveTrading = process.env.AUTO_TRADE_ENABLED === "true";
-  let changed = false;
 
   for (const rule of rules) {
-    if (!rule.enabled || rule.executed) continue;
+    if (!rule.enabled || rule.executed || rule.pending) continue;
 
     const action = {
       ruleId: rule.id || "unnamed-rule",
@@ -495,6 +541,10 @@ async function runAutoSellRules({ dryRun }) {
       }
       if (!rule.eventSlug || !rule.matchQuestionIncludes || !Number.isFinite(action.targetPrice)) {
         actions.push({ ...action, status: "skipped", reason: "invalid_rule" });
+        continue;
+      }
+      if (!rule.id) {
+        actions.push({ ...action, status: "skipped", reason: "rule_id_missing" });
         continue;
       }
 
@@ -546,6 +596,12 @@ async function runAutoSellRules({ dryRun }) {
         continue;
       }
 
+      const pendingId = await markRulePending(rule.id);
+      if (!pendingId) {
+        actions.push({ ...action, status: "skipped", reason: "rule_already_pending_or_executed" });
+        continue;
+      }
+
       const order = await placeSellOrder({
         tokenId: tokenIds.noTokenId,
         price: action.targetPrice,
@@ -558,8 +614,10 @@ async function runAutoSellRules({ dryRun }) {
 
       const orderId = order.orderID || order.orderId || order.id;
       const now = formatDateTimeHkt(new Date());
-      Object.assign(rule, {
+      await updateSellRule(rule.id, {
         executed: true,
+        pending: false,
+        pendingId,
         executedAt: now,
         orderId,
         orderStatus: order.status || "",
@@ -568,7 +626,6 @@ async function runAutoSellRules({ dryRun }) {
         targetPrice: action.targetPrice,
         observedSellPrice: currentSellPrice
       });
-      changed = true;
 
       const soldAction = {
         ...action,
@@ -581,14 +638,18 @@ async function runAutoSellRules({ dryRun }) {
     } catch (error) {
       const failedAction = { ...action, status: "failed", error: error.message };
       actions.push(failedAction);
+      if (!dryRun && liveTrading && rule.id) {
+        await updateSellRule(rule.id, {
+          pending: false,
+          pendingId: "",
+          lastError: error.message,
+          lastErrorAt: formatDateTimeHkt(new Date())
+        });
+      }
       if (!dryRun) {
         await sendTelegram(tradeMessage(failedAction));
       }
     }
-  }
-
-  if (changed) {
-    await writeSellRules({ ...rulesPayload, rules });
   }
 
   return {
@@ -645,8 +706,13 @@ function telegramMessage(result) {
 
 async function sendCheckResult(res, result, dryRun) {
   if (!dryRun) {
-    await sendTelegram(telegramMessage(result));
-    result.alert = true;
+    try {
+      await sendTelegram(telegramMessage(result));
+      result.alert = true;
+    } catch (error) {
+      result.alert = false;
+      result.telegramError = error.message;
+    }
   }
   try {
     result.autoSell = await runAutoSellRules({ dryRun });
