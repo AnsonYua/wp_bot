@@ -82,6 +82,14 @@ AUTO_TRADE_ENABLED=true
 
 `dryRun=1` never places orders.
 
+Update rules:
+
+```text
+POST /api/rules?secret=YOUR_CRON_SECRET
+```
+
+The body can be one rule object or `{ "rules": [...] }`.
+
 ## Environment Variables
 
 Set these in Vercel:
