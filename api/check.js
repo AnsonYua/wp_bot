@@ -4,12 +4,15 @@ import { list, put } from "@vercel/blob";
 const baseline = JSON.parse(
   readFileSync(new URL("../monthly_exact_baseline.json", import.meta.url), "utf8")
 );
+const bucketBaseline = JSON.parse(
+  readFileSync(new URL("../monthly_bucket_baseline.json", import.meta.url), "utf8")
+);
 
 const HKO_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=en";
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 const CLOB_BASE = "https://clob.polymarket.com";
 const HKO_CACHE_PATH = "hko-cache/latest.json";
-const APP_VERSION = "2026-05-13-cache-check-v2";
+const APP_VERSION = "2026-05-13-bucket-market-v1";
 
 const MONTH_NAMES = [
   "january",
@@ -208,6 +211,66 @@ function findExactMarket(event, forecastMax, dateText) {
   return event.markets?.find((market) => exact.test(market.question || ""));
 }
 
+function parseBucketMarket(market, dateText) {
+  const dateLabel = questionDateText(dateText);
+  const pattern = new RegExp(
+    `be\\s+(\\d+)°?C\\s+or\\s+(higher|below)\\s+on\\s+${dateLabel}\\?`,
+    "i"
+  );
+  const match = pattern.exec(market.question || "");
+  if (!match) return null;
+  return {
+    market,
+    threshold: Number(match[1]),
+    direction: match[2].toLowerCase() === "higher" ? "above" : "below"
+  };
+}
+
+function findBucketMarket(event, forecastMax, dateText) {
+  const candidates = (event.markets || [])
+    .map((market) => parseBucketMarket(market, dateText))
+    .filter(Boolean)
+    .filter((bucket) => (
+      bucket.direction === "above"
+        ? forecastMax >= bucket.threshold
+        : forecastMax <= bucket.threshold
+    ));
+
+  candidates.sort((a, b) => Math.abs(forecastMax - a.threshold) - Math.abs(forecastMax - b.threshold));
+  return candidates[0] || null;
+}
+
+function bucketMarketLabel(bucket) {
+  return bucket.direction === "above"
+    ? `${bucket.threshold}C_OR_HIGHER`
+    : `${bucket.threshold}C_OR_BELOW`;
+}
+
+function getBucketBaseline(month, direction, threshold) {
+  const minSampleCount = Number(process.env.MIN_BUCKET_SAMPLE_COUNT || "20");
+  const thresholdKey = String(threshold);
+  const monthly = bucketBaseline.months?.[month]?.[direction]?.[thresholdKey];
+  if (monthly?.sample_count >= minSampleCount) {
+    return { ...monthly, source: "monthly_bucket_baseline" };
+  }
+
+  const fallback = bucketBaseline.fallback_all_months?.[direction]?.[thresholdKey];
+  if (fallback?.sample_count >= minSampleCount) {
+    return {
+      ...fallback,
+      source: "all_months_bucket_baseline",
+      monthly_sample_count: monthly?.sample_count || 0
+    };
+  }
+
+  return {
+    source: "bucket_baseline_unavailable",
+    monthly_sample_count: monthly?.sample_count || 0,
+    fallback_sample_count: fallback?.sample_count || 0,
+    min_sample_count: minSampleCount
+  };
+}
+
 function parseJsonArray(value) {
   if (Array.isArray(value)) return value;
   return JSON.parse(value || "[]");
@@ -257,6 +320,8 @@ function telegramMessage(result) {
     "",
     `Date: ${result.date}`,
     `HKO prediction: highest temperature ${result.forecastMax}°C`,
+    `Market question: ${result.marketQuestion}`,
+    `Market type: ${result.marketType}`,
     `Yes price: ${result.yesPrice}`,
     `No price: ${result.noPrice}`,
     `Model Yes: ${result.yesProb}`,
@@ -307,21 +372,57 @@ export default async function handler(req, res) {
 
     const slug = eventSlug(date);
     const event = await fetchJson(`${GAMMA_BASE}/events/slug/${slug}`);
-    const market = findExactMarket(event, forecastMax, date);
+    let market = findExactMarket(event, forecastMax, date);
+    let marketType = "exact";
+    let baselineInfo = {
+      source: "monthly_exact_baseline",
+      sample_count: monthBaseline.sample_count
+    };
+    let yesProb = Number(monthBaseline.yes_probability);
+    let noProb = Number(monthBaseline.no_probability);
+
     if (!market) {
-      return json(res, 200, {
-        version: APP_VERSION,
-        checkedAtHkt: formatDateTimeHkt(new Date()),
-        date,
-        forecastMax,
-        forecastSource,
-        hkoUpdateTime,
-        cache,
-        bet: "NONE",
-        alert: false,
-        eventSlug: slug,
-        reason: "exact_market_not_found"
-      });
+      const bucket = findBucketMarket(event, forecastMax, date);
+      if (!bucket) {
+        return json(res, 200, {
+          version: APP_VERSION,
+          checkedAtHkt: formatDateTimeHkt(new Date()),
+          date,
+          forecastMax,
+          forecastSource,
+          hkoUpdateTime,
+          cache,
+          bet: "NONE",
+          alert: false,
+          eventSlug: slug,
+          reason: "exact_or_supported_bucket_market_not_found"
+        });
+      }
+
+      baselineInfo = getBucketBaseline(month, bucket.direction, bucket.threshold);
+      if (baselineInfo.source === "bucket_baseline_unavailable") {
+        return json(res, 200, {
+          version: APP_VERSION,
+          checkedAtHkt: formatDateTimeHkt(new Date()),
+          date,
+          forecastMax,
+          forecastSource,
+          hkoUpdateTime,
+          cache,
+          bet: "NONE",
+          alert: false,
+          eventSlug: slug,
+          marketQuestion: bucket.market.question,
+          marketType: bucketMarketLabel(bucket),
+          baseline: baselineInfo,
+          reason: "bucket_baseline_sample_too_small"
+        });
+      }
+
+      market = bucket.market;
+      marketType = bucketMarketLabel(bucket);
+      yesProb = Number(baselineInfo.yes_probability);
+      noProb = Number(baselineInfo.no_probability);
     }
 
     const tokenIds = parseJsonArray(market.clobTokenIds);
@@ -338,6 +439,8 @@ export default async function handler(req, res) {
         alert: false,
         eventSlug: slug,
         marketQuestion: market.question,
+        marketType,
+        baseline: baselineInfo,
         reason: "clob_token_ids_missing"
       });
     }
@@ -347,8 +450,6 @@ export default async function handler(req, res) {
       buyPrice(tokenIds[1])
     ]);
 
-    const yesProb = Number(monthBaseline.yes_probability);
-    const noProb = Number(monthBaseline.no_probability);
     const yesEdge = round6(yesProb - yesPrice);
     const noEdge = round6(noProb - noPrice);
 
@@ -377,6 +478,8 @@ export default async function handler(req, res) {
       alert: false,
       eventSlug: slug,
       marketQuestion: market.question,
+      marketType,
+      baseline: baselineInfo,
       forecastSource,
       hkoUpdateTime,
       cache
