@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { list, put } from "@vercel/blob";
+import { Chain, ClobClient, OrderType, Side } from "@polymarket/clob-client-v2";
+import { Wallet } from "ethers";
 
 const baseline = JSON.parse(
   readFileSync(new URL("../monthly_exact_baseline.json", import.meta.url), "utf8")
@@ -11,8 +13,10 @@ const bucketBaseline = JSON.parse(
 const HKO_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=fnd&lang=en";
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 const CLOB_BASE = "https://clob.polymarket.com";
+const DATA_API_BASE = "https://data-api.polymarket.com";
 const HKO_CACHE_PATH = "hko-cache/latest.json";
-const APP_VERSION = "2026-05-13-skip-alert-cache-safe-v1";
+const SELL_RULES_PATH = "trade-rules/sell-rules.json";
+const APP_VERSION = "2026-05-13-auto-sell-v1";
 
 const MONTH_NAMES = [
   "january",
@@ -143,7 +147,8 @@ async function readForecastCache() {
   if (!blob) {
     throw new Error("Forecast cache not found");
   }
-  const response = await fetch(blob.url, { cache: "no-store" });
+  const cacheBustedUrl = `${blob.url}${blob.url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+  const response = await fetch(cacheBustedUrl, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Forecast cache not found: HTTP ${response.status}`);
   }
@@ -300,6 +305,13 @@ async function buyPrice(tokenId) {
   return Number(data.price);
 }
 
+async function sellPrice(tokenId) {
+  // Polymarket CLOB uses side=BUY to return the bid, i.e. the price received to sell this token.
+  const url = `${CLOB_BASE}/price?token_id=${encodeURIComponent(tokenId)}&side=BUY`;
+  const data = await fetchJson(url);
+  return Number(data.price);
+}
+
 function round6(value) {
   return Math.round(value * 1_000_000) / 1_000_000;
 }
@@ -324,6 +336,268 @@ async function sendTelegram(message) {
     const body = await response.text();
     throw new Error(`Telegram HTTP ${response.status}: ${body}`);
   }
+}
+
+async function readSellRules() {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    return { rules: [], available: false, reason: "blob_token_missing" };
+  }
+
+  const result = await list({ prefix: SELL_RULES_PATH, limit: 1 });
+  const blob = result.blobs.find((item) => item.pathname === SELL_RULES_PATH);
+  if (!blob) {
+    const emptyRules = { rules: [] };
+    await writeSellRules(emptyRules);
+    return { ...emptyRules, available: true, created: true };
+  }
+
+  const cacheBustedUrl = `${blob.url}${blob.url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+  const response = await fetch(cacheBustedUrl, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Sell rules not found: HTTP ${response.status}`);
+  }
+  return { ...(await response.json()), available: true };
+}
+
+async function writeSellRules(payload) {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    throw new Error("Missing BLOB_READ_WRITE_TOKEN");
+  }
+  await put(SELL_RULES_PATH, JSON.stringify(payload, null, 2), {
+    access: "public",
+    contentType: "application/json",
+    addRandomSuffix: false,
+    allowOverwrite: true
+  });
+}
+
+function ruleMatchesMarket(market, rule) {
+  const question = String(market.question || "").toLowerCase();
+  const needle = String(rule.matchQuestionIncludes || "").toLowerCase();
+  return needle && question.includes(needle);
+}
+
+function getTickSize(market) {
+  return String(market.orderPriceMinTickSize || market.tickSize || "0.01");
+}
+
+function getPositionSize(positions, tokenId) {
+  const position = positions.find((item) => {
+    const ids = [item.asset, item.assetId, item.tokenId, item.token_id, item.clobTokenId];
+    return ids.some((id) => String(id) === String(tokenId));
+  });
+  if (!position) return 0;
+  return Number(position.size ?? position.balance ?? position.quantity ?? position.shares ?? position.amount ?? 0);
+}
+
+async function getPositionSizeForToken(tokenId) {
+  const user = process.env.POLYMARKET_USER_ADDRESS;
+  if (!user) {
+    throw new Error("Missing POLYMARKET_USER_ADDRESS");
+  }
+
+  const positions = await fetchJson(
+    `${DATA_API_BASE}/positions?user=${encodeURIComponent(user)}`
+  );
+  return getPositionSize(Array.isArray(positions) ? positions : [], tokenId);
+}
+
+function createPolymarketSigner() {
+  const privateKey = process.env.POLYMARKET_PRIVATE_KEY;
+  if (!privateKey) {
+    throw new Error("Missing POLYMARKET_PRIVATE_KEY");
+  }
+
+  const wallet = new Wallet(privateKey);
+  return {
+    getAddress: () => wallet.getAddress(),
+    _signTypedData: (domain, types, value) => wallet.signTypedData(domain, types, value)
+  };
+}
+
+async function placeSellOrder({ tokenId, price, size, market }) {
+  const funder = process.env.POLYMARKET_FUNDER_ADDRESS;
+  const signatureType = Number(process.env.POLYMARKET_SIGNATURE_TYPE || "3");
+  if (!funder) {
+    throw new Error("Missing POLYMARKET_FUNDER_ADDRESS");
+  }
+
+  const signer = createPolymarketSigner();
+  const clientOptions = {
+    host: CLOB_BASE,
+    chain: Chain.POLYGON,
+    signer,
+    signatureType,
+    funderAddress: funder
+  };
+  const authClient = new ClobClient(clientOptions);
+  const creds = await authClient.createOrDeriveApiKey();
+  const clobClient = new ClobClient({ ...clientOptions, creds });
+
+  return clobClient.createAndPostOrder(
+    {
+      tokenID: String(tokenId),
+      price: Number(price),
+      side: Side.SELL,
+      size: Number(size)
+    },
+    {
+      tickSize: getTickSize(market),
+      negRisk: Boolean(market.negRisk)
+    },
+    OrderType.GTC
+  );
+}
+
+function tradeMessage(action) {
+  const lines = [
+    action.status === "sold" ? "Auto-sell executed" : "Auto-sell failed",
+    "",
+    `Rule: ${action.ruleId}`,
+    `Market: ${action.marketQuestion || "N/A"}`,
+    `Outcome: ${action.outcome || "No"}`,
+    `Target price: ${action.targetPrice ?? "N/A"}`,
+    `Current sell price: ${action.currentSellPrice ?? "N/A"}`,
+    `Shares: ${action.shares ?? "N/A"}`
+  ];
+
+  if (action.orderId) lines.push(`Order ID: ${action.orderId}`);
+  if (action.reason) lines.push(`Reason: ${action.reason}`);
+  if (action.error) lines.push(`Error: ${action.error}`);
+  if (action.eventSlug) {
+    lines.push("", `Market: https://polymarket.com/event/${action.eventSlug}`);
+  }
+
+  return lines.join("\n");
+}
+
+async function runAutoSellRules({ dryRun }) {
+  const rulesPayload = await readSellRules();
+  const rules = Array.isArray(rulesPayload.rules) ? rulesPayload.rules : [];
+  const actions = [];
+  const liveTrading = process.env.AUTO_TRADE_ENABLED === "true";
+  let changed = false;
+
+  for (const rule of rules) {
+    if (!rule.enabled || rule.executed) continue;
+
+    const action = {
+      ruleId: rule.id || "unnamed-rule",
+      eventSlug: rule.eventSlug,
+      outcome: rule.outcome || "No",
+      targetPrice: Number(rule.sellAtOrAbove)
+    };
+
+    try {
+      if (String(rule.outcome || "No").toLowerCase() !== "no") {
+        actions.push({ ...action, status: "skipped", reason: "only_no_outcome_supported" });
+        continue;
+      }
+      if (!rule.eventSlug || !rule.matchQuestionIncludes || !Number.isFinite(action.targetPrice)) {
+        actions.push({ ...action, status: "skipped", reason: "invalid_rule" });
+        continue;
+      }
+
+      const event = await fetchJson(`${GAMMA_BASE}/events/slug/${rule.eventSlug}`);
+      const matchingMarkets = (event.markets || []).filter((item) => ruleMatchesMarket(item, rule));
+      if (matchingMarkets.length === 0) {
+        actions.push({ ...action, status: "skipped", reason: "market_not_found" });
+        continue;
+      }
+      if (matchingMarkets.length > 1) {
+        actions.push({ ...action, status: "skipped", reason: "multiple_markets_matched" });
+        continue;
+      }
+
+      const market = matchingMarkets[0];
+      action.marketQuestion = market.question;
+      const tokenIds = getOutcomeTokenIds(market);
+      if (!tokenIds?.noTokenId) {
+        actions.push({ ...action, status: "skipped", reason: "no_token_id_missing" });
+        continue;
+      }
+
+      const shares = getPositionSizeForToken(tokenIds.noTokenId);
+      const [currentSellPrice, positionSize] = await Promise.all([
+        sellPrice(tokenIds.noTokenId),
+        shares
+      ]);
+      action.currentSellPrice = currentSellPrice;
+      action.shares = positionSize;
+
+      if (!Number.isFinite(currentSellPrice)) {
+        actions.push({ ...action, status: "skipped", reason: "sell_price_unavailable" });
+        continue;
+      }
+      if (!Number.isFinite(positionSize) || positionSize <= 0) {
+        actions.push({ ...action, status: "skipped", reason: "no_position" });
+        continue;
+      }
+      if (currentSellPrice < action.targetPrice) {
+        actions.push({ ...action, status: "skipped", reason: "target_not_reached" });
+        continue;
+      }
+      if (dryRun) {
+        actions.push({ ...action, status: "would_sell", reason: "dry_run" });
+        continue;
+      }
+      if (!liveTrading) {
+        actions.push({ ...action, status: "would_sell", reason: "auto_trade_disabled" });
+        continue;
+      }
+
+      const order = await placeSellOrder({
+        tokenId: tokenIds.noTokenId,
+        price: action.targetPrice,
+        size: positionSize,
+        market
+      });
+      if (order?.success === false || order?.error || order?.errorMsg) {
+        throw new Error(order.errorMsg || order.error || "Polymarket order was not successful");
+      }
+
+      const orderId = order.orderID || order.orderId || order.id;
+      const now = formatDateTimeHkt(new Date());
+      Object.assign(rule, {
+        executed: true,
+        executedAt: now,
+        orderId,
+        orderStatus: order.status || "",
+        soldOutcome: "No",
+        soldShares: positionSize,
+        targetPrice: action.targetPrice,
+        observedSellPrice: currentSellPrice
+      });
+      changed = true;
+
+      const soldAction = {
+        ...action,
+        status: "sold",
+        orderId,
+        orderStatus: order.status || ""
+      };
+      actions.push(soldAction);
+      await sendTelegram(tradeMessage(soldAction));
+    } catch (error) {
+      const failedAction = { ...action, status: "failed", error: error.message };
+      actions.push(failedAction);
+      if (!dryRun) {
+        await sendTelegram(tradeMessage(failedAction));
+      }
+    }
+  }
+
+  if (changed) {
+    await writeSellRules({ ...rulesPayload, rules });
+  }
+
+  return {
+    enabled: liveTrading,
+    dryRun,
+    rulesPath: SELL_RULES_PATH,
+    rulesCount: rules.length,
+    actions
+  };
 }
 
 function telegramMessage(result) {
@@ -373,6 +647,14 @@ async function sendCheckResult(res, result, dryRun) {
   if (!dryRun) {
     await sendTelegram(telegramMessage(result));
     result.alert = true;
+  }
+  try {
+    result.autoSell = await runAutoSellRules({ dryRun });
+  } catch (error) {
+    result.autoSell = { error: error.message };
+    if (!dryRun) {
+      await sendTelegram(`Auto-sell check failed\n\nError: ${error.message}`);
+    }
   }
   return json(res, 200, result);
 }

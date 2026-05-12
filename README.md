@@ -2,7 +2,7 @@
 
 Lean Vercel endpoint for monitoring Hong Kong HKO temperature Polymarket markets.
 
-It does not trade. It only sends Telegram alerts when estimated edge is at least `10%`.
+It sends Telegram alerts when estimated edge is at least `10%`. It can also auto-sell an existing `NO` position when a simple Blob rule target is reached.
 
 ## Endpoint
 
@@ -42,7 +42,45 @@ Use this only when you missed the previous-day HKO forecast cache.
 5. Find exact market matching the HKO forecast temperature.
 6. Fetch Yes and No buy prices from Polymarket CLOB.
 7. Compare prices with monthly baseline probabilities.
-8. Send Telegram if Yes or No edge is at least `EDGE_THRESHOLD`.
+8. Send Telegram with the check result.
+9. Read optional auto-sell rules from Vercel Blob and sell existing `NO` positions only when enabled.
+
+## Auto-Sell Rules
+
+Rules live in one Vercel Blob file:
+
+```text
+trade-rules/sell-rules.json
+```
+
+Example:
+
+```json
+{
+  "rules": [
+    {
+      "id": "may-14-28c-no-exit",
+      "enabled": true,
+      "executed": false,
+      "eventSlug": "highest-temperature-in-hong-kong-on-may-14-2026",
+      "matchQuestionIncludes": "Will the highest temperature in Hong Kong be 28°C on May 14?",
+      "outcome": "No",
+      "sellAtOrAbove": 0.75,
+      "sellAll": true
+    }
+  ]
+}
+```
+
+Keep `matchQuestionIncludes` specific. If it matches multiple markets, the bot skips the rule instead of guessing.
+
+Live orders only run when:
+
+```text
+AUTO_TRADE_ENABLED=true
+```
+
+`dryRun=1` never places orders.
 
 ## Environment Variables
 
@@ -54,9 +92,15 @@ TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=8682734076
 EDGE_THRESHOLD=0.10
 BLOB_READ_WRITE_TOKEN=
+AUTO_TRADE_ENABLED=false
+POLYMARKET_PRIVATE_KEY=
+POLYMARKET_FUNDER_ADDRESS=
+POLYMARKET_SIGNATURE_TYPE=3
+POLYMARKET_USER_ADDRESS=
 ```
 
 Do not commit real Telegram tokens.
+Do not commit your Polymarket private key.
 
 `BLOB_READ_WRITE_TOKEN` is created automatically when you connect Vercel Blob storage to the project.
 
