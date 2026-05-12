@@ -9,7 +9,7 @@ const HKO_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dat
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 const CLOB_BASE = "https://clob.polymarket.com";
 const HKO_CACHE_PATH = "hko-cache/latest.json";
-const APP_VERSION = "2026-05-13-cache-check-v1";
+const APP_VERSION = "2026-05-13-cache-check-v2";
 
 const MONTH_NAMES = [
   "january",
@@ -60,6 +60,14 @@ function formatDate(date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function formatDateTimeHkt(date) {
+  const hkt = new Date(date.toLocaleString("en-US", { timeZone: "Asia/Hong_Kong" }));
+  const hour = String(hkt.getHours()).padStart(2, "0");
+  const minute = String(hkt.getMinutes()).padStart(2, "0");
+  const second = String(hkt.getSeconds()).padStart(2, "0");
+  return `${formatDate(hkt)}T${hour}:${minute}:${second}+08:00`;
 }
 
 function yyyymmdd(dateText) {
@@ -303,7 +311,7 @@ export default async function handler(req, res) {
     if (!market) {
       return json(res, 200, {
         version: APP_VERSION,
-        checkedAtHkt: nowHkt().toISOString(),
+        checkedAtHkt: formatDateTimeHkt(new Date()),
         date,
         forecastMax,
         forecastSource,
@@ -320,7 +328,7 @@ export default async function handler(req, res) {
     if (tokenIds.length < 2) {
       return json(res, 200, {
         version: APP_VERSION,
-        checkedAtHkt: nowHkt().toISOString(),
+        checkedAtHkt: formatDateTimeHkt(new Date()),
         date,
         forecastMax,
         forecastSource,
@@ -356,7 +364,7 @@ export default async function handler(req, res) {
 
     const result = {
       version: APP_VERSION,
-      checkedAtHkt: nowHkt().toISOString(),
+      checkedAtHkt: formatDateTimeHkt(new Date()),
       date,
       forecastMax,
       yesPrice,
