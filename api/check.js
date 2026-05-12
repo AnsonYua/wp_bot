@@ -570,6 +570,28 @@ function tradeMessage(action) {
   return lines.join("\n");
 }
 
+function sellCheckSummary(actions) {
+  if (!actions.length) return "";
+
+  const lines = ["Auto-sell check result", ""];
+  for (const action of actions) {
+    lines.push(
+      `Rule: ${action.ruleId}`,
+      `Status: ${action.status}`,
+      `Market: ${action.marketQuestion || "N/A"}`,
+      `Target price: ${action.targetPrice ?? "N/A"}`,
+      `Current sell price: ${action.currentSellPrice ?? "N/A"}`,
+      `Shares: ${action.shares ?? "N/A"}`
+    );
+    if (action.reason) lines.push(`Reason: ${action.reason}`);
+    if (action.error) lines.push(`Error: ${action.error}`);
+    if (action.orderId) lines.push(`Order ID: ${action.orderId}`);
+    lines.push("");
+  }
+
+  return lines.join("\n").trim();
+}
+
 async function runAutoSellRules({ dryRun }) {
   const rulesPayload = await readSellRules();
   const rules = Array.isArray(rulesPayload.rules) ? rulesPayload.rules : [];
@@ -686,11 +708,6 @@ async function runAutoSellRules({ dryRun }) {
         orderStatus: order.status || ""
       };
       actions.push(soldAction);
-      try {
-        await sendTelegram(tradeMessage(soldAction));
-      } catch (telegramError) {
-        soldAction.telegramError = telegramError.message;
-      }
     } catch (error) {
       const failedAction = { ...action, status: "failed", error: error.message };
       actions.push(failedAction);
@@ -702,20 +719,29 @@ async function runAutoSellRules({ dryRun }) {
           lastErrorAt: formatDateTimeHkt(new Date())
         });
       }
-      if (!dryRun) {
-        await sendTelegram(tradeMessage(failedAction));
-      }
     }
   }
 
   await appendSellLog(actions);
+  let telegramError = "";
+  if (!dryRun) {
+    const summary = sellCheckSummary(actions);
+    if (summary) {
+      try {
+        await sendTelegram(summary);
+      } catch (error) {
+        telegramError = error.message;
+      }
+    }
+  }
 
   return {
     enabled: liveTrading,
     dryRun,
     rulesPath: SELL_RULES_PATH,
     rulesCount: rules.length,
-    actions
+    actions,
+    telegramError
   };
 }
 
