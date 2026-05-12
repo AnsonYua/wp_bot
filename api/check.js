@@ -17,6 +17,7 @@ const CLOB_BASE = "https://clob.polymarket.com";
 const DATA_API_BASE = "https://data-api.polymarket.com";
 const HKO_CACHE_PATH = "hko-cache/latest.json";
 const SELL_RULES_PATH = "trade-rules/sell-rules.json";
+const PENDING_RULE_TIMEOUT_MS = 5 * 60 * 1000;
 const APP_VERSION = "2026-05-13-auto-sell-v1";
 
 const MONTH_NAMES = [
@@ -321,6 +322,19 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function parseHktDateTime(value) {
+  if (!value) return null;
+  const date = new Date(String(value).replace("+08:00", "+08:00"));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function isPendingStale(rule) {
+  if (!rule.pending) return false;
+  const pendingAt = parseHktDateTime(rule.pendingAt);
+  if (!pendingAt) return true;
+  return Date.now() - pendingAt.getTime() > PENDING_RULE_TIMEOUT_MS;
+}
+
 async function sendTelegram(message) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -385,7 +399,7 @@ async function markRulePending(ruleId) {
   const latest = await readSellRules();
   const rules = Array.isArray(latest.rules) ? latest.rules : [];
   const rule = rules.find((item) => item.id === ruleId);
-  if (!rule || !rule.enabled || rule.executed || rule.pending) {
+  if (!rule || !rule.enabled || rule.executed || (rule.pending && !isPendingStale(rule))) {
     return null;
   }
 
@@ -525,7 +539,7 @@ async function runAutoSellRules({ dryRun }) {
   const liveTrading = process.env.AUTO_TRADE_ENABLED === "true";
 
   for (const rule of rules) {
-    if (!rule.enabled || rule.executed || rule.pending) continue;
+    if (!rule.enabled || rule.executed || (rule.pending && !isPendingStale(rule))) continue;
 
     const action = {
       ruleId: rule.id || "unnamed-rule",
@@ -608,11 +622,11 @@ async function runAutoSellRules({ dryRun }) {
         size: positionSize,
         market
       });
-      if (order?.success === false || order?.error || order?.errorMsg) {
-        throw new Error(order.errorMsg || order.error || "Polymarket order was not successful");
+      const orderId = order?.orderID || order?.orderId || order?.id;
+      if (order?.success !== true && !orderId) {
+        throw new Error(order?.errorMsg || order?.error || "Polymarket order was not successful");
       }
 
-      const orderId = order.orderID || order.orderId || order.id;
       const now = formatDateTimeHkt(new Date());
       await updateSellRule(rule.id, {
         executed: true,
@@ -634,7 +648,11 @@ async function runAutoSellRules({ dryRun }) {
         orderStatus: order.status || ""
       };
       actions.push(soldAction);
-      await sendTelegram(tradeMessage(soldAction));
+      try {
+        await sendTelegram(tradeMessage(soldAction));
+      } catch (telegramError) {
+        soldAction.telegramError = telegramError.message;
+      }
     } catch (error) {
       const failedAction = { ...action, status: "failed", error: error.message };
       actions.push(failedAction);
@@ -832,13 +850,10 @@ export default async function handler(req, res) {
     const noEdge = round6(noProb - noPrice);
 
     let bet = "NONE";
-    let bestEdge = 0;
     if (yesEdge >= edgeThreshold && yesEdge >= noEdge) {
       bet = "BUY_YES";
-      bestEdge = yesEdge;
     } else if (noEdge >= edgeThreshold) {
       bet = "BUY_NO";
-      bestEdge = noEdge;
     }
 
     const result = {
