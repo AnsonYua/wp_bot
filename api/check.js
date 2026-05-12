@@ -324,7 +324,7 @@ function sleep(ms) {
 
 function parseHktDateTime(value) {
   if (!value) return null;
-  const date = new Date(String(value).replace("+08:00", "+08:00"));
+  const date = new Date(String(value));
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
@@ -357,7 +357,7 @@ async function sendTelegram(message) {
   }
 }
 
-async function readSellRules({ createIfMissing = true } = {}) {
+async function readSellRules() {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     return { rules: [], available: false, reason: "blob_token_missing" };
   }
@@ -365,12 +365,7 @@ async function readSellRules({ createIfMissing = true } = {}) {
   const result = await list({ prefix: SELL_RULES_PATH, limit: 1 });
   const blob = result.blobs.find((item) => item.pathname === SELL_RULES_PATH);
   if (!blob) {
-    const emptyRules = { rules: [] };
-    if (createIfMissing) {
-      await writeSellRules(emptyRules);
-      return { ...emptyRules, available: true, created: true };
-    }
-    return { ...emptyRules, available: true, created: false, missing: true };
+    return { rules: [], available: true, missing: true };
   }
 
   const cacheBustedUrl = `${blob.url}${blob.url.includes("?") ? "&" : "?"}t=${Date.now()}`;
@@ -412,7 +407,7 @@ async function markRulePending(ruleId) {
   // Vercel Blob has no compare-and-set write. Re-read after a short delay so
   // overlapping scheduler calls do not both proceed after racing the same rule.
   await sleep(750);
-  const verify = await readSellRules({ createIfMissing: false });
+  const verify = await readSellRules();
   const verifiedRule = (verify.rules || []).find((item) => item.id === ruleId);
   if (!verifiedRule || verifiedRule.executed || verifiedRule.pendingId !== pendingId) {
     return null;
@@ -511,8 +506,13 @@ async function placeSellOrder({ tokenId, price, size, market }) {
 }
 
 function tradeMessage(action) {
+  const title = action.status === "sold"
+    ? "Auto-sell executed"
+    : action.status === "failed"
+      ? "Auto-sell failed"
+      : "Auto-sell check";
   const lines = [
-    action.status === "sold" ? "Auto-sell executed" : "Auto-sell failed",
+    title,
     "",
     `Rule: ${action.ruleId}`,
     `Market: ${action.marketQuestion || "N/A"}`,
@@ -533,7 +533,7 @@ function tradeMessage(action) {
 }
 
 async function runAutoSellRules({ dryRun }) {
-  const rulesPayload = await readSellRules({ createIfMissing: !dryRun });
+  const rulesPayload = await readSellRules();
   const rules = Array.isArray(rulesPayload.rules) ? rulesPayload.rules : [];
   const actions = [];
   const liveTrading = process.env.AUTO_TRADE_ENABLED === "true";
