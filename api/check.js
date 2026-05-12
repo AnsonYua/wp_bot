@@ -302,11 +302,16 @@ export default async function handler(req, res) {
     const market = findExactMarket(event, forecastMax, date);
     if (!market) {
       return json(res, 200, {
+        version: APP_VERSION,
+        checkedAtHkt: nowHkt().toISOString(),
         date,
         forecastMax,
         forecastSource,
+        hkoUpdateTime,
+        cache,
         bet: "NONE",
         alert: false,
+        eventSlug: slug,
         reason: "exact_market_not_found"
       });
     }
@@ -314,11 +319,17 @@ export default async function handler(req, res) {
     const tokenIds = parseJsonArray(market.clobTokenIds);
     if (tokenIds.length < 2) {
       return json(res, 200, {
+        version: APP_VERSION,
+        checkedAtHkt: nowHkt().toISOString(),
         date,
         forecastMax,
         forecastSource,
+        hkoUpdateTime,
+        cache,
         bet: "NONE",
         alert: false,
+        eventSlug: slug,
+        marketQuestion: market.question,
         reason: "clob_token_ids_missing"
       });
     }
@@ -357,6 +368,7 @@ export default async function handler(req, res) {
       bet,
       alert: false,
       eventSlug: slug,
+      marketQuestion: market.question,
       forecastSource,
       hkoUpdateTime,
       cache
