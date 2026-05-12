@@ -9,6 +9,7 @@ const HKO_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dat
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 const CLOB_BASE = "https://clob.polymarket.com";
 const HKO_CACHE_PATH = "hko-cache/latest.json";
+const APP_VERSION = "2026-05-13-cache-check-v1";
 
 const MONTH_NAMES = [
   "january",
@@ -343,6 +344,8 @@ export default async function handler(req, res) {
     }
 
     const result = {
+      version: APP_VERSION,
+      checkedAtHkt: nowHkt().toISOString(),
       date,
       forecastMax,
       yesPrice,
