@@ -12,7 +12,7 @@ const HKO_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dat
 const GAMMA_BASE = "https://gamma-api.polymarket.com";
 const CLOB_BASE = "https://clob.polymarket.com";
 const HKO_CACHE_PATH = "hko-cache/latest.json";
-const APP_VERSION = "2026-05-13-bucket-market-v1";
+const APP_VERSION = "2026-05-13-skip-alert-cache-safe-v1";
 
 const MONTH_NAMES = [
   "january",
@@ -170,7 +170,7 @@ async function getForecastForCheck(queryDate) {
         cache: { used: true, saved: false }
       };
     } catch (error) {
-      const fallback = await getLiveForecast(today);
+      const fallback = await getLiveForecast(today, { saveCache: false });
       return {
         ...fallback,
         forecastSource: "hko_live_cache_fallback",
@@ -184,10 +184,10 @@ async function getForecastForCheck(queryDate) {
   }
 
   const date = queryDate || tomorrowHkt();
-  return getLiveForecast(date);
+  return getLiveForecast(date, { saveCache: !queryDate });
 }
 
-async function getLiveForecast(date) {
+async function getLiveForecast(date, { saveCache = false } = {}) {
   const hko = await fetchJson(HKO_URL);
   const forecast = findForecast(hko, date);
   if (!forecast) {
@@ -195,7 +195,9 @@ async function getLiveForecast(date) {
   }
 
   const cachePayload = forecastCachePayload(date, hko, forecast);
-  const cache = await saveForecastCache(cachePayload);
+  const cache = saveCache
+    ? await saveForecastCache(cachePayload)
+    : { saved: false, reason: "cache_save_disabled" };
   return {
     date,
     forecastMax: cachePayload.forecastMax,
@@ -276,6 +278,21 @@ function parseJsonArray(value) {
   return JSON.parse(value || "[]");
 }
 
+function getOutcomeTokenIds(market) {
+  const outcomes = parseJsonArray(market.outcomes);
+  const tokenIds = parseJsonArray(market.clobTokenIds);
+  const yesIndex = outcomes.findIndex((outcome) => String(outcome).toLowerCase() === "yes");
+  const noIndex = outcomes.findIndex((outcome) => String(outcome).toLowerCase() === "no");
+
+  if (yesIndex === -1 || noIndex === -1 || !tokenIds[yesIndex] || !tokenIds[noIndex]) {
+    return null;
+  }
+  return {
+    yesTokenId: tokenIds[yesIndex],
+    noTokenId: tokenIds[noIndex]
+  };
+}
+
 async function buyPrice(tokenId) {
   // Polymarket CLOB uses side=SELL to return the ask, i.e. the price paid to buy this token.
   const url = `${CLOB_BASE}/price?token_id=${encodeURIComponent(tokenId)}&side=SELL`;
@@ -314,22 +331,27 @@ function telegramMessage(result) {
   const edge = result.bet === "BUY_YES" ? result.yesEdge : result.noEdge;
   const price = result.bet === "BUY_YES" ? result.yesPrice : result.noPrice;
   const model = result.bet === "BUY_YES" ? result.yesProb : result.noProb;
+  const value = (item) => item ?? "N/A";
 
   const lines = [
     hasEdge ? "Weather edge found" : "Weather check",
     "",
-    `Date: ${result.date}`,
-    `HKO prediction: highest temperature ${result.forecastMax}°C`,
-    `Market question: ${result.marketQuestion}`,
-    `Market type: ${result.marketType}`,
-    `Yes price: ${result.yesPrice}`,
-    `No price: ${result.noPrice}`,
-    `Model Yes: ${result.yesProb}`,
-    `Model No: ${result.noProb}`,
-    `Yes edge: ${result.yesEdge}`,
-    `No edge: ${result.noEdge}`,
+    `Date: ${value(result.date)}`,
+    `HKO prediction: highest temperature ${value(result.forecastMax)}°C`,
+    `Market question: ${value(result.marketQuestion)}`,
+    `Market type: ${value(result.marketType)}`,
+    `Yes price: ${value(result.yesPrice)}`,
+    `No price: ${value(result.noPrice)}`,
+    `Model Yes: ${value(result.yesProb)}`,
+    `Model No: ${value(result.noProb)}`,
+    `Yes edge: ${value(result.yesEdge)}`,
+    `No edge: ${value(result.noEdge)}`,
     `Bet: ${hasEdge ? result.bet.replace("_", " ") : "NONE"}`
   ];
+
+  if (result.reason) {
+    lines.push(`Reason: ${result.reason}`);
+  }
 
   if (hasEdge) {
     lines.push(
@@ -345,6 +367,14 @@ function telegramMessage(result) {
   );
 
   return lines.join("\n");
+}
+
+async function sendCheckResult(res, result, dryRun) {
+  if (!dryRun) {
+    await sendTelegram(telegramMessage(result));
+    result.alert = true;
+  }
+  return json(res, 200, result);
 }
 
 export default async function handler(req, res) {
@@ -384,7 +414,7 @@ export default async function handler(req, res) {
     if (!market) {
       const bucket = findBucketMarket(event, forecastMax, date);
       if (!bucket) {
-        return json(res, 200, {
+        return sendCheckResult(res, {
           version: APP_VERSION,
           checkedAtHkt: formatDateTimeHkt(new Date()),
           date,
@@ -396,12 +426,12 @@ export default async function handler(req, res) {
           alert: false,
           eventSlug: slug,
           reason: "exact_or_supported_bucket_market_not_found"
-        });
+        }, dryRun);
       }
 
       baselineInfo = getBucketBaseline(month, bucket.direction, bucket.threshold);
       if (baselineInfo.source === "bucket_baseline_unavailable") {
-        return json(res, 200, {
+        return sendCheckResult(res, {
           version: APP_VERSION,
           checkedAtHkt: formatDateTimeHkt(new Date()),
           date,
@@ -416,7 +446,7 @@ export default async function handler(req, res) {
           marketType: bucketMarketLabel(bucket),
           baseline: baselineInfo,
           reason: "bucket_baseline_sample_too_small"
-        });
+        }, dryRun);
       }
 
       market = bucket.market;
@@ -425,9 +455,9 @@ export default async function handler(req, res) {
       noProb = Number(baselineInfo.no_probability);
     }
 
-    const tokenIds = parseJsonArray(market.clobTokenIds);
-    if (tokenIds.length < 2) {
-      return json(res, 200, {
+    const tokenIds = getOutcomeTokenIds(market);
+    if (!tokenIds) {
+      return sendCheckResult(res, {
         version: APP_VERSION,
         checkedAtHkt: formatDateTimeHkt(new Date()),
         date,
@@ -442,12 +472,12 @@ export default async function handler(req, res) {
         marketType,
         baseline: baselineInfo,
         reason: "clob_token_ids_missing"
-      });
+      }, dryRun);
     }
 
     const [yesPrice, noPrice] = await Promise.all([
-      buyPrice(tokenIds[0]),
-      buyPrice(tokenIds[1])
+      buyPrice(tokenIds.yesTokenId),
+      buyPrice(tokenIds.noTokenId)
     ]);
 
     const yesEdge = round6(yesProb - yesPrice);
@@ -485,12 +515,7 @@ export default async function handler(req, res) {
       cache
     };
 
-    if (!dryRun) {
-      await sendTelegram(telegramMessage(result));
-      result.alert = true;
-    }
-
-    return json(res, 200, result);
+    return sendCheckResult(res, result, dryRun);
   } catch (error) {
     return json(res, 500, {
       error: "check_failed",
