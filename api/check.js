@@ -603,33 +603,6 @@ async function placeSellOrder({ tokenId, price, size, market }) {
   return placeOrder({ tokenId, price, size, side: Side.SELL, market });
 }
 
-function tradeMessage(action) {
-  const title = action.status === "sold"
-    ? "Auto-sell executed"
-    : action.status === "failed"
-      ? "Auto-sell failed"
-      : "Auto-sell check";
-  const lines = [
-    title,
-    "",
-    `Rule: ${action.ruleId}`,
-    `Market: ${action.marketQuestion || "N/A"}`,
-    `Outcome: ${action.outcome || "No"}`,
-    `Target price: ${action.targetPrice ?? "N/A"}`,
-    `Current sell price: ${action.currentSellPrice ?? "N/A"}`,
-    `Shares: ${action.shares ?? "N/A"}`
-  ];
-
-  if (action.orderId) lines.push(`Order ID: ${action.orderId}`);
-  if (action.reason) lines.push(`Reason: ${action.reason}`);
-  if (action.error) lines.push(`Error: ${action.error}`);
-  if (action.eventSlug) {
-    lines.push("", `Market: https://polymarket.com/event/${action.eventSlug}`);
-  }
-
-  return lines.join("\n");
-}
-
 function sellCheckSummary(actions) {
   if (!actions.length) return "";
 
@@ -757,9 +730,10 @@ async function runAutoBuy(result, market, tokenIds, dryRun) {
     }
 
     const records = Array.isArray(recordsPayload.records) ? recordsPayload.records : [];
-    if (records.some((record) => record.key === action.key)) {
-      action.status = "duplicate";
-      action.reason = "already_purchased";
+    const existingRecord = records.find((record) => record.key === action.key);
+    if (existingRecord) {
+      action.status = existingRecord.status === "failed" ? "skipped" : "duplicate";
+      action.reason = existingRecord.status === "failed" ? "previous_attempt_failed" : "already_purchased";
       return action;
     }
 
