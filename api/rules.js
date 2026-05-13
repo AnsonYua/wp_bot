@@ -31,9 +31,15 @@ async function readBody(req) {
   return body ? JSON.parse(body) : {};
 }
 
+async function findBlob(path) {
+  const result = await list({ prefix: path, limit: 100 });
+  const matches = result.blobs.filter((item) => item.pathname === path);
+  matches.sort((a, b) => new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0));
+  return matches[0] || null;
+}
+
 async function readRules() {
-  const result = await list({ prefix: SELL_RULES_PATH, limit: 1 });
-  const blob = result.blobs.find((item) => item.pathname === SELL_RULES_PATH);
+  const blob = await findBlob(SELL_RULES_PATH);
   if (!blob) {
     return { rules: [] };
   }
@@ -47,8 +53,7 @@ async function readRules() {
 }
 
 async function readBlobJson(path, fallback) {
-  const result = await list({ prefix: path, limit: 1 });
-  const blob = result.blobs.find((item) => item.pathname === path);
+  const blob = await findBlob(path);
   if (!blob) {
     return fallback;
   }

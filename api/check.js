@@ -142,21 +142,34 @@ async function saveForecastCache(payload) {
   return { saved: true, url: blob.url };
 }
 
+async function findBlob(path) {
+  const result = await list({ prefix: path, limit: 100 });
+  const matches = result.blobs.filter((item) => item.pathname === path);
+  matches.sort((a, b) => new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0));
+  return matches[0] || null;
+}
+
+async function readBlobJson(path) {
+  const blob = await findBlob(path);
+  if (!blob) return null;
+
+  const cacheBustedUrl = `${blob.url}${blob.url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+  const response = await fetch(cacheBustedUrl, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Blob read failed for ${path}: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 async function readForecastCache() {
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     throw new Error("Missing BLOB_READ_WRITE_TOKEN");
   }
-  const result = await list({ prefix: HKO_CACHE_PATH, limit: 1 });
-  const blob = result.blobs.find((item) => item.pathname === HKO_CACHE_PATH);
-  if (!blob) {
+  const cached = await readBlobJson(HKO_CACHE_PATH);
+  if (!cached) {
     throw new Error("Forecast cache not found");
   }
-  const cacheBustedUrl = `${blob.url}${blob.url.includes("?") ? "&" : "?"}t=${Date.now()}`;
-  const response = await fetch(cacheBustedUrl, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Forecast cache not found: HTTP ${response.status}`);
-  }
-  return response.json();
+  return cached;
 }
 
 async function getForecastForCheck(queryDate) {
@@ -320,10 +333,6 @@ function round6(value) {
   return Math.round(value * 1_000_000) / 1_000_000;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function parseHktDateTime(value) {
   if (!value) return null;
   const date = new Date(String(value));
@@ -364,18 +373,11 @@ async function readSellRules() {
     return { rules: [], available: false, reason: "blob_token_missing" };
   }
 
-  const result = await list({ prefix: SELL_RULES_PATH, limit: 1 });
-  const blob = result.blobs.find((item) => item.pathname === SELL_RULES_PATH);
-  if (!blob) {
+  const rules = await readBlobJson(SELL_RULES_PATH);
+  if (!rules) {
     return { rules: [], available: true, missing: true };
   }
-
-  const cacheBustedUrl = `${blob.url}${blob.url.includes("?") ? "&" : "?"}t=${Date.now()}`;
-  const response = await fetch(cacheBustedUrl, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Sell rules not found: HTTP ${response.status}`);
-  }
-  return { ...(await response.json()), available: true };
+  return { ...rules, available: true };
 }
 
 async function writeSellRules(payload) {
@@ -396,15 +398,7 @@ async function appendSellLog(entries) {
 
   let current = { entries: [] };
   try {
-    const result = await list({ prefix: SELL_LOG_PATH, limit: 1 });
-    const blob = result.blobs.find((item) => item.pathname === SELL_LOG_PATH);
-    if (blob) {
-      const url = `${blob.url}${blob.url.includes("?") ? "&" : "?"}t=${Date.now()}`;
-      const response = await fetch(url, { cache: "no-store" });
-      if (response.ok) {
-        current = await response.json();
-      }
-    }
+    current = (await readBlobJson(SELL_LOG_PATH)) || current;
   } catch {
     current = { entries: [] };
   }
@@ -441,16 +435,6 @@ async function markRulePending(ruleId) {
   rule.pendingId = pendingId;
   rule.pendingAt = formatDateTimeHkt(new Date());
   await writeSellRules({ ...latest, rules });
-
-  // Vercel Blob has no compare-and-set write. Re-read after a short delay so
-  // overlapping scheduler calls do not both proceed after racing the same rule.
-  await sleep(750);
-  const verify = await readSellRules();
-  const verifiedRule = (verify.rules || []).find((item) => item.id === ruleId);
-  if (!verifiedRule || verifiedRule.executed || verifiedRule.pendingId !== pendingId) {
-    return null;
-  }
-
   return pendingId;
 }
 
