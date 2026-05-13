@@ -2,7 +2,7 @@
 
 Lean Vercel endpoint for monitoring Hong Kong HKO temperature Polymarket markets.
 
-It sends Telegram alerts when estimated edge is at least `10%`. It does not place orders or require Polymarket private keys.
+It sends Telegram alerts when estimated edge is at least `10%`. It can also send actionable edge messages to a second Telegram bot/chat. It does not place orders or require Polymarket private keys.
 
 ## Endpoint
 
@@ -43,7 +43,7 @@ Use this only when you missed the previous-day HKO forecast cache.
 6. Fetch Yes and No buy prices from Polymarket CLOB.
 7. Compare prices with monthly baseline probabilities.
 8. Send Telegram with the check result.
-9. Send Telegram with the HKO prediction, market prices, model probabilities, edge, and suggested side.
+9. If `bet` is `BUY_YES` or `BUY_NO`, send the actionable edge message to the optional second Telegram chat.
 
 ## Checking Logic
 
@@ -78,6 +78,24 @@ Use these manual order rules when reading the Telegram message:
 - For bucket markets such as `31°C or higher`, make sure the baseline source is `monthly_bucket_baseline` or `all_months_bucket_baseline`, not `bucket_baseline_unavailable`.
 - Keep all private keys out of this project. The monitor does not need `POLYMARKET_PRIVATE_KEY`, `POLYMARKET_FUNDER_ADDRESS`, or trading API credentials.
 
+## Telegram
+
+Primary check messages use:
+
+```text
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+```
+
+Optional actionable edge messages use:
+
+```text
+ACTION_TELEGRAM_BOT_TOKEN=
+ACTION_TELEGRAM_CHAT_ID=
+```
+
+Set `ACTION_TELEGRAM_CHAT_ID=8682734076` if the action bot should message the same private chat shown by Telegram `getUpdates`.
+
 ## Environment Variables
 
 Set these in Vercel:
@@ -86,11 +104,14 @@ Set these in Vercel:
 CRON_SECRET=
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=8682734076
+ACTION_TELEGRAM_BOT_TOKEN=
+ACTION_TELEGRAM_CHAT_ID=8682734076
 EDGE_THRESHOLD=0.10
 BLOB_READ_WRITE_TOKEN=
 ```
 
 Do not commit real Telegram tokens.
+If a Telegram token was pasted into chat or logs, rotate it in BotFather before using it in production.
 Do not commit any wallet private key.
 
 `BLOB_READ_WRITE_TOKEN` is created automatically when you connect Vercel Blob storage to the project.

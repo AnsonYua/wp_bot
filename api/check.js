@@ -322,11 +322,9 @@ function round6(value) {
   return Math.round(value * 1_000_000) / 1_000_000;
 }
 
-async function sendTelegram(message) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
+async function sendTelegramTo({ token, chatId, message }) {
   if (!token || !chatId) {
-    throw new Error("Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID");
+    throw new Error("Missing Telegram token or chat ID");
   }
 
   const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -342,6 +340,22 @@ async function sendTelegram(message) {
     const body = await response.text();
     throw new Error(`Telegram HTTP ${response.status}: ${body}`);
   }
+}
+
+async function sendTelegram(message) {
+  return sendTelegramTo({
+    token: process.env.TELEGRAM_BOT_TOKEN,
+    chatId: process.env.TELEGRAM_CHAT_ID,
+    message
+  });
+}
+
+async function sendActionTelegram(message) {
+  return sendTelegramTo({
+    token: process.env.ACTION_TELEGRAM_BOT_TOKEN,
+    chatId: process.env.ACTION_TELEGRAM_CHAT_ID,
+    message
+  });
 }
 
 function telegramMessage(result) {
@@ -387,6 +401,27 @@ function telegramMessage(result) {
   return lines.join("\n");
 }
 
+function actionTelegramMessage(result) {
+  const side = result.bet.replace("_", " ");
+  const edge = result.bet === "BUY_YES" ? result.yesEdge : result.noEdge;
+  const price = result.bet === "BUY_YES" ? result.yesPrice : result.noPrice;
+  const probability = result.bet === "BUY_YES" ? result.yesProb : result.noProb;
+
+  return [
+    "Actionable weather edge",
+    "",
+    `Suggested action: ${side}`,
+    `Date: ${result.date}`,
+    `HKO prediction: highest temperature ${result.forecastMax}°C`,
+    `Market: ${result.marketQuestion}`,
+    `Price: ${price}`,
+    `Model probability: ${probability}`,
+    `Edge: ${edge}`,
+    "",
+    `Link: https://polymarket.com/event/${result.eventSlug}`
+  ].join("\n");
+}
+
 async function sendCheckResult(res, result, dryRun) {
   if (!dryRun) {
     try {
@@ -395,6 +430,15 @@ async function sendCheckResult(res, result, dryRun) {
     } catch (error) {
       result.alert = false;
       result.telegramError = error.message;
+    }
+    if (result.bet !== "NONE") {
+      try {
+        await sendActionTelegram(actionTelegramMessage(result));
+        result.actionAlert = true;
+      } catch (error) {
+        result.actionAlert = false;
+        result.actionTelegramError = error.message;
+      }
     }
   }
   return json(res, 200, result);
