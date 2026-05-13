@@ -924,25 +924,28 @@ async function runAutoSellRules({ dryRun }) {
       }
 
       const now = formatDateTimeHkt(new Date());
-      await updateSellRule(rule.id, {
-        executed: true,
-        pending: false,
-        pendingId,
-        executedAt: now,
-        orderId,
-        orderStatus: order.status || "",
-        soldOutcome: "No",
-        soldShares: positionSize,
-        targetPrice: action.targetPrice,
-        observedSellPrice: currentSellPrice
-      });
-
       const soldAction = {
         ...action,
         status: "sold",
         orderId,
         orderStatus: order.status || ""
       };
+      try {
+        await updateSellRule(rule.id, {
+          executed: true,
+          pending: false,
+          pendingId,
+          executedAt: now,
+          orderId,
+          orderStatus: order.status || "",
+          soldOutcome: "No",
+          soldShares: positionSize,
+          targetPrice: action.targetPrice,
+          observedSellPrice: currentSellPrice
+        });
+      } catch (error) {
+        soldAction.recordUpdateError = error.message;
+      }
       actions.push(soldAction);
     } catch (error) {
       const failedAction = { ...action, status: "failed", error: error.message };

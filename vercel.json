@@ -1,5 +1,5 @@
 {
-  "regions": ["dub1"],
+  "regions": ["hkg1"],
   "functions": {
     "api/check.js": {
       "maxDuration": 10
