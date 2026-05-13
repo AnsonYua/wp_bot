@@ -43,7 +43,7 @@ Use this only when you missed the previous-day HKO forecast cache.
 6. Fetch Yes and No buy prices from Polymarket CLOB.
 7. Compare prices with monthly baseline probabilities.
 8. Send Telegram with the check result.
-9. If there is an edge and no prior buy record, place one auto-buy using quarter Kelly on a `$10` bankroll with a `5` share minimum.
+9. If there is an edge and no prior buy record, place one auto-buy using quarter Kelly on a `$10` bankroll with a `5` share minimum. Auto-buy only runs when the selected Yes/No price is between `0.25` and `0.85`.
 10. Read optional auto-sell rules from Vercel Blob and sell existing `NO` positions only when enabled.
 
 ## Auto-Buy Records

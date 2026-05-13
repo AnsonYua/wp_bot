@@ -24,6 +24,8 @@ const PENDING_RULE_TIMEOUT_MS = 5 * 60 * 1000;
 const KELLY_BANKROLL_USD = 10;
 const KELLY_FRACTION = 0.25;
 const MIN_BUY_SHARES = 5;
+const MIN_AUTO_BUY_PRICE = 0.25;
+const MAX_AUTO_BUY_PRICE = 0.85;
 const APP_VERSION = "2026-05-13-auto-buy-v1";
 
 const MONTH_NAMES = [
@@ -723,6 +725,11 @@ async function runAutoBuy(result, market, tokenIds, dryRun) {
     if (!Number.isFinite(action.price) || action.price <= 0 || action.price >= 1) {
       action.status = "skipped";
       action.reason = "buy_price_unavailable";
+      return action;
+    }
+    if (action.price < MIN_AUTO_BUY_PRICE || action.price > MAX_AUTO_BUY_PRICE) {
+      action.status = "skipped";
+      action.reason = "buy_price_out_of_range";
       return action;
     }
 
