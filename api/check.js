@@ -450,6 +450,22 @@ export default async function handler(req, res) {
     return json(res, 401, { error: "unauthorized" });
   }
 
+  if (query.get("testAction") === "1") {
+    try {
+      await sendActionTelegram([
+        "Action Telegram test",
+        "",
+        `Sent from Vercel at ${formatDateTimeHkt(new Date())}`
+      ].join("\n"));
+      return json(res, 200, { actionAlert: true });
+    } catch (error) {
+      return json(res, 500, {
+        actionAlert: false,
+        actionTelegramError: error.message
+      });
+    }
+  }
+
   const queryDate = query.get("date");
   const dryRun = query.get("dryRun") === "1";
   const edgeThreshold = Number(process.env.EDGE_THRESHOLD || "0.10");

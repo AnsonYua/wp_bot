@@ -96,6 +96,12 @@ ACTION_TELEGRAM_CHAT_ID=
 
 Set `ACTION_TELEGRAM_CHAT_ID=8682734076` if the action bot should message the same private chat shown by Telegram `getUpdates`.
 
+Test the action channel after deployment:
+
+```text
+GET /api/check?secret=YOUR_CRON_SECRET&testAction=1
+```
+
 ## Environment Variables
 
 Set these in Vercel:
