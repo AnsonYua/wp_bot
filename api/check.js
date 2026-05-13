@@ -794,9 +794,13 @@ async function runAutoBuy(result, market, tokenIds, dryRun) {
       orderId,
       createdAtHkt: formatDateTimeHkt(new Date())
     };
-    await updateBuyRecord(action.key, { ...record, status: "bought" });
     action.status = "bought";
     action.orderId = orderId;
+    try {
+      await updateBuyRecord(action.key, { ...record, status: "bought" });
+    } catch (error) {
+      action.recordUpdateError = error.message;
+    }
     return action;
   } catch (error) {
     action.status = "failed";
