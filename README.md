@@ -54,7 +54,7 @@ Successful and attempted auto-buys are stored in one Vercel Blob file:
 trade-rules/buy-records.json
 ```
 
-The duplicate key is `date|eventSlug|BUY_YES/BUY_NO`, so the bot will not repeatedly buy the same market side.
+The duplicate key is `date|eventSlug|BUY_YES/BUY_NO`, so the bot will not repeatedly buy the same market side after a pending or successful order. Failed attempts are recorded with a reason, but they do not permanently block a later retry.
 
 ## Auto-Sell Rules
 

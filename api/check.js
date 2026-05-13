@@ -687,6 +687,15 @@ function buySummary(action) {
   return lines.join("\n");
 }
 
+function orderFailureReason(message) {
+  const text = String(message || "").toLowerCase();
+  if (text.includes("geoblock") || text.includes("restricted in your region")) return "region_restricted";
+  if (text.includes("insufficient") || text.includes("balance") || text.includes("allowance")) return "insufficient_funds_or_allowance";
+  if (text.includes("min") || text.includes("minimum")) return "minimum_order_not_met";
+  if (text.includes("signature") || text.includes("funder") || text.includes("private_key") || text.includes("private key")) return "wallet_config_error";
+  return "order_failed";
+}
+
 async function runAutoBuy(result, market, tokenIds, dryRun) {
   const liveTrading = process.env.AUTO_TRADE_ENABLED === "true";
   const info = autoBuyInfo(result, tokenIds);
@@ -732,9 +741,12 @@ async function runAutoBuy(result, market, tokenIds, dryRun) {
     const records = Array.isArray(recordsPayload.records) ? recordsPayload.records : [];
     const existingRecord = records.find((record) => record.key === action.key);
     if (existingRecord) {
-      action.status = existingRecord.status === "failed" ? "skipped" : "duplicate";
-      action.reason = existingRecord.status === "failed" ? "previous_attempt_failed" : "already_purchased";
-      return action;
+      if (existingRecord.status !== "failed") {
+        action.status = "duplicate";
+        action.reason = "already_purchased";
+        return action;
+      }
+      action.previousFailure = existingRecord.error || existingRecord.reason || "previous_attempt_failed";
     }
 
     if (dryRun) {
@@ -805,11 +817,13 @@ async function runAutoBuy(result, market, tokenIds, dryRun) {
   } catch (error) {
     action.status = "failed";
     action.error = error.message;
+    action.reason = orderFailureReason(error.message);
     if (pendingSaved) {
       try {
         await updateBuyRecord(action.key, {
           status: "failed",
           error: error.message,
+          reason: action.reason,
           failedAtHkt: formatDateTimeHkt(new Date())
         });
       } catch (updateError) {
