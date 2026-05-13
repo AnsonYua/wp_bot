@@ -2,7 +2,7 @@
 
 Lean Vercel endpoint for monitoring Hong Kong HKO temperature Polymarket markets.
 
-It sends Telegram alerts when estimated edge is at least `10%`. It can also auto-sell an existing `NO` position when a simple Blob rule target is reached.
+It sends Telegram alerts when estimated edge is at least `10%`. When live trading is enabled, it can auto-buy one edge per market side and auto-sell existing `NO` positions from simple Blob rules.
 
 ## Endpoint
 
@@ -43,7 +43,18 @@ Use this only when you missed the previous-day HKO forecast cache.
 6. Fetch Yes and No buy prices from Polymarket CLOB.
 7. Compare prices with monthly baseline probabilities.
 8. Send Telegram with the check result.
-9. Read optional auto-sell rules from Vercel Blob and sell existing `NO` positions only when enabled.
+9. If there is an edge and no prior buy record, place one auto-buy using quarter Kelly on a `$10` bankroll with a `5` share minimum.
+10. Read optional auto-sell rules from Vercel Blob and sell existing `NO` positions only when enabled.
+
+## Auto-Buy Records
+
+Successful and attempted auto-buys are stored in one Vercel Blob file:
+
+```text
+trade-rules/buy-records.json
+```
+
+The duplicate key is `date|eventSlug|BUY_YES/BUY_NO`, so the bot will not repeatedly buy the same market side.
 
 ## Auto-Sell Rules
 
@@ -124,6 +135,12 @@ If this folder is inside the `weatherdata` repo, set Vercel Root Directory to:
 
 ```text
 outputProgram
+```
+
+The production function region is configured as Hong Kong:
+
+```text
+hkg1
 ```
 
 Then deploy normally.
