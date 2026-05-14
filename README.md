@@ -2,7 +2,7 @@
 
 Lean Vercel endpoint for monitoring Hong Kong HKO temperature Polymarket markets.
 
-It sends Telegram alerts when estimated edge is at least `10%`. It can also send actionable edge messages to a second Telegram bot/chat. It does not place orders or require Polymarket private keys.
+It sends Telegram alerts when estimated edge is at least `10%`. It can also send actionable edge messages to a second Telegram bot/chat. It can optionally auto-sell manually bought positions from explicit sell rules.
 
 ## Endpoint
 
@@ -44,6 +44,7 @@ Use this only when you missed the previous-day HKO forecast cache.
 7. Compare prices with monthly baseline probabilities.
 8. Send Telegram with the check result.
 9. If `bet` is `BUY_YES` or `BUY_NO`, send the actionable edge message to the optional second Telegram chat.
+10. Read optional sell rules and sell matching existing positions only when `AUTO_SELL_ENABLED=true`.
 
 ## Checking Logic
 
@@ -66,9 +67,9 @@ Market matching:
 - If no exact market exists, try the nearest supported bucket that contains the HKO forecast, for example `31°C or higher`.
 - If no matching market or usable baseline exists, the endpoint returns `bet: "NONE"` with a `reason`.
 
-## Order Rules
+## Action Rules
 
-The code now only suggests trades. It intentionally does not auto-buy or auto-sell.
+The edge logic only suggests buys. It does not auto-buy.
 
 Use these manual order rules when reading the Telegram message:
 
@@ -76,7 +77,50 @@ Use these manual order rules when reading the Telegram message:
 - Only send actionable buy alerts when the selected Yes/No price is between `MIN_ACTION_PRICE` and `MAX_ACTION_PRICE`, default `0.25` to `0.85`.
 - Check spread, liquidity, and market question before placing any manual order.
 - For bucket markets such as `31°C or higher`, make sure the baseline source is `monthly_bucket_baseline` or `all_months_bucket_baseline`, not `bucket_baseline_unavailable`.
-- Keep all private keys out of this project. The monitor does not need `POLYMARKET_PRIVATE_KEY`, `POLYMARKET_FUNDER_ADDRESS`, or trading API credentials.
+
+## Auto-Sell
+
+Auto-sell is separate from buy alerts. Use it for half-manual mode: you buy manually, then the bot monitors price and sells when a rule target is reached.
+
+Live selling only runs when:
+
+```text
+AUTO_SELL_ENABLED=true
+```
+
+Rules live in Vercel Blob:
+
+```text
+trade-rules/sell-rules.json
+```
+
+Example:
+
+```json
+{
+  "rules": [
+    {
+      "id": "may-14-29c-no-exit",
+      "enabled": true,
+      "executed": false,
+      "eventSlug": "highest-temperature-in-hong-kong-on-may-14-2026",
+      "matchQuestionIncludes": "29°C",
+      "outcome": "No",
+      "sellAtOrAbove": 0.42,
+      "sellAll": true
+    }
+  ]
+}
+```
+
+Update or read rules:
+
+```text
+GET /api/rules?secret=YOUR_CRON_SECRET
+POST /api/rules?secret=YOUR_CRON_SECRET
+```
+
+`dryRun=1` on `/api/check` evaluates sell rules but never places orders.
 
 ## Telegram
 
@@ -116,11 +160,16 @@ EDGE_THRESHOLD=0.10
 MIN_ACTION_PRICE=0.25
 MAX_ACTION_PRICE=0.85
 BLOB_READ_WRITE_TOKEN=
+AUTO_SELL_ENABLED=false
+POLYMARKET_PRIVATE_KEY=
+POLYMARKET_FUNDER_ADDRESS=
+POLYMARKET_SIGNATURE_TYPE=3
+POLYMARKET_USER_ADDRESS=
 ```
 
 Do not commit real Telegram tokens.
 If a Telegram token was pasted into chat or logs, rotate it in BotFather before using it in production.
-Do not commit any wallet private key.
+Do not commit any wallet private key. Put trading keys only in Vercel environment variables.
 
 `BLOB_READ_WRITE_TOKEN` is created automatically when you connect Vercel Blob storage to the project.
 
