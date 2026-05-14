@@ -73,7 +73,7 @@ The code now only suggests trades. It intentionally does not auto-buy or auto-se
 Use these manual order rules when reading the Telegram message:
 
 - Only consider `BUY_YES` or `BUY_NO` when edge is at least `EDGE_THRESHOLD`, currently `0.10` unless changed in Vercel.
-- Avoid buying very cheap or very expensive contracts; the previous execution rule was to only consider prices from `0.25` to `0.85`.
+- Only send actionable buy alerts when the selected Yes/No price is between `MIN_ACTION_PRICE` and `MAX_ACTION_PRICE`, default `0.25` to `0.85`.
 - Check spread, liquidity, and market question before placing any manual order.
 - For bucket markets such as `31°C or higher`, make sure the baseline source is `monthly_bucket_baseline` or `all_months_bucket_baseline`, not `bucket_baseline_unavailable`.
 - Keep all private keys out of this project. The monitor does not need `POLYMARKET_PRIVATE_KEY`, `POLYMARKET_FUNDER_ADDRESS`, or trading API credentials.
@@ -113,6 +113,8 @@ TELEGRAM_CHAT_ID=8682734076
 ACTION_TELEGRAM_BOT_TOKEN=
 ACTION_TELEGRAM_CHAT_ID=8682734076
 EDGE_THRESHOLD=0.10
+MIN_ACTION_PRICE=0.25
+MAX_ACTION_PRICE=0.85
 BLOB_READ_WRITE_TOKEN=
 ```
 

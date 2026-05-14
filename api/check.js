@@ -322,6 +322,19 @@ function round6(value) {
   return Math.round(value * 1_000_000) / 1_000_000;
 }
 
+function priceInActionRange(price, minPrice, maxPrice) {
+  return Number.isFinite(price) && price >= minPrice && price <= maxPrice;
+}
+
+function pickBet({ yesEdge, noEdge, yesPrice, noPrice, edgeThreshold, minActionPrice, maxActionPrice }) {
+  const yesAllowed = yesEdge >= edgeThreshold && priceInActionRange(yesPrice, minActionPrice, maxActionPrice);
+  const noAllowed = noEdge >= edgeThreshold && priceInActionRange(noPrice, minActionPrice, maxActionPrice);
+
+  if (yesAllowed && (!noAllowed || yesEdge >= noEdge)) return "BUY_YES";
+  if (noAllowed) return "BUY_NO";
+  return "NONE";
+}
+
 async function sendTelegramTo({ token, chatId, message }) {
   if (!token || !chatId) {
     throw new Error("Missing Telegram token or chat ID");
@@ -469,6 +482,8 @@ export default async function handler(req, res) {
   const queryDate = query.get("date");
   const dryRun = query.get("dryRun") === "1";
   const edgeThreshold = Number(process.env.EDGE_THRESHOLD || "0.10");
+  const minActionPrice = Number(process.env.MIN_ACTION_PRICE || "0.25");
+  const maxActionPrice = Number(process.env.MAX_ACTION_PRICE || "0.85");
 
   try {
     const forecastInfo = await getForecastForCheck(queryDate);
@@ -566,12 +581,15 @@ export default async function handler(req, res) {
     const yesEdge = round6(yesProb - yesPrice);
     const noEdge = round6(noProb - noPrice);
 
-    let bet = "NONE";
-    if (yesEdge >= edgeThreshold && yesEdge >= noEdge) {
-      bet = "BUY_YES";
-    } else if (noEdge >= edgeThreshold) {
-      bet = "BUY_NO";
-    }
+    const bet = pickBet({
+      yesEdge,
+      noEdge,
+      yesPrice,
+      noPrice,
+      edgeThreshold,
+      minActionPrice,
+      maxActionPrice
+    });
 
     const result = {
       version: APP_VERSION,
@@ -585,6 +603,10 @@ export default async function handler(req, res) {
       yesEdge,
       noEdge,
       bet,
+      actionPriceRange: {
+        min: minActionPrice,
+        max: maxActionPrice
+      },
       alert: false,
       eventSlug: slug,
       marketQuestion: market.question,
