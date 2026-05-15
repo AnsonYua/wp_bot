@@ -886,6 +886,16 @@ async function runAutoSellRules({ dryRun }) {
       action.status = "sold";
       action.orderId = orderId;
       action.orderStatus = order.status || "";
+      Object.assign(rule, {
+        executed: true,
+        executedAt: formatDateTimeHkt(new Date()),
+        orderId,
+        orderStatus: order.status || "",
+        soldOutcome: action.outcome,
+        soldShares: shares,
+        targetPrice: action.targetPrice,
+        observedSellPrice: currentSellPrice
+      });
       const latest = await readSellRules();
       const latestRules = Array.isArray(latest.rules) ? latest.rules : [];
       const latestRule = latestRules.find((item) => item.id === rule.id);
@@ -909,7 +919,13 @@ async function runAutoSellRules({ dryRun }) {
   }
 
   if (rulesChanged && !dryRun) {
-    await writeSellRules({ rules });
+    const latest = await readSellRules();
+    const latestRules = Array.isArray(latest.rules) ? latest.rules : [];
+    const mergedRules = rules.map((rule) => {
+      const latestRule = latestRules.find((item) => item.id === rule.id);
+      return latestRule?.executed ? latestRule : rule;
+    });
+    await writeSellRules({ rules: mergedRules });
   }
 
   if (!dryRun) {
