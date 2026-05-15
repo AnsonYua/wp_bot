@@ -514,11 +514,19 @@ function buyRecordKey(result, side) {
   return `${result.date}|${result.eventSlug}|${side}`;
 }
 
-function buySize(price) {
-  const requestedShares = Number(process.env.AUTO_BUY_SHARES || "5");
+function buySize({ probability, price }) {
+  const bankrollUsd = Number(process.env.AUTO_BUY_BANKROLL_USD || "10");
+  const kellyFraction = Number(process.env.AUTO_BUY_KELLY_FRACTION || "0.25");
+  const minSharesFloor = Number(process.env.MIN_AUTO_BUY_SHARES || "5");
   const minUsd = Number(process.env.MIN_AUTO_BUY_USD || "1");
-  const minShares = Number.isFinite(price) && price > 0 ? minUsd / price : 0;
-  return round6(Math.max(requestedShares, minShares));
+  if (!Number.isFinite(probability) || !Number.isFinite(price) || price <= 0 || price >= 1) {
+    return 0;
+  }
+
+  const kelly = Math.max(0, (probability - price) / (1 - price));
+  const stakeUsd = bankrollUsd * kellyFraction * kelly;
+  const minShares = minUsd / price;
+  return round6(Math.max(stakeUsd / price, minSharesFloor, minShares));
 }
 
 function buySummary(action) {
@@ -679,7 +687,7 @@ async function runAutoBuy(result, market, { dryRun }) {
     outcome: info.outcome,
     tokenId: String(info.tokenId),
     price: info.price,
-    shares: buySize(info.price),
+    shares: buySize(info),
     probability: info.probability,
     edge: info.edge
   };
