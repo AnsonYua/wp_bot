@@ -90,6 +90,19 @@ function eventSlug(dateText) {
   return `highest-temperature-in-hong-kong-on-${MONTH_NAMES[month - 1]}-${day}-${year}`;
 }
 
+function dateFromEventSlug(slug) {
+  const match = /^highest-temperature-in-hong-kong-on-([a-z]+)-(\d{1,2})-(\d{4})$/i.exec(String(slug || ""));
+  if (!match) return "";
+  const monthIndex = MONTH_NAMES.indexOf(match[1].toLowerCase());
+  if (monthIndex === -1) return "";
+  return `${match[3]}-${String(monthIndex + 1).padStart(2, "0")}-${String(Number(match[2])).padStart(2, "0")}`;
+}
+
+function isPastEventSlug(slug) {
+  const eventDate = dateFromEventSlug(slug);
+  return eventDate && eventDate < formatDate(nowHkt());
+}
+
 function questionDateText(dateText) {
   const [, month, day] = dateText.split("-").map(Number);
   const monthName = MONTH_NAMES[month - 1];
@@ -787,6 +800,7 @@ async function runAutoSellRules({ dryRun }) {
   const rules = Array.isArray(rulesPayload.rules) ? rulesPayload.rules : [];
   const enabled = process.env.AUTO_SELL_ENABLED === "true";
   const actions = [];
+  let rulesChanged = false;
 
   for (const rule of rules) {
     const action = {
@@ -798,6 +812,14 @@ async function runAutoSellRules({ dryRun }) {
 
     try {
       if (!rule.enabled || rule.executed) continue;
+      if (isPastEventSlug(rule.eventSlug)) {
+        rule.enabled = false;
+        rule.expired = true;
+        rule.expiredAt = formatDateTimeHkt(new Date());
+        rulesChanged = true;
+        actions.push({ ...action, status: "skipped", reason: "event_expired" });
+        continue;
+      }
       if (!rule.id || !rule.eventSlug || !rule.matchQuestionIncludes || !Number.isFinite(action.targetPrice)) {
         actions.push({ ...action, status: "skipped", reason: "invalid_rule" });
         continue;
@@ -884,6 +906,10 @@ async function runAutoSellRules({ dryRun }) {
     } catch (error) {
       actions.push({ ...action, status: "failed", error: error.message });
     }
+  }
+
+  if (rulesChanged && !dryRun) {
+    await writeSellRules({ rules });
   }
 
   if (!dryRun) {

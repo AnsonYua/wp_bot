@@ -139,6 +139,8 @@ POST /api/rules?secret=YOUR_CRON_SECRET
 
 `dryRun=1` on `/api/check` evaluates sell rules but never places orders.
 
+Expired event rules are skipped before any CLOB price check. If the event date in `eventSlug` is before today's Hong Kong date, the rule is disabled automatically on a live check.
+
 ## Telegram
 
 Primary check messages use:
