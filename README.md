@@ -2,7 +2,7 @@
 
 Lean Vercel endpoint for monitoring Hong Kong HKO temperature Polymarket markets.
 
-It sends Telegram alerts when estimated edge is at least `10%`. It can also send actionable edge messages to a second Telegram bot/chat. It can optionally auto-sell manually bought positions from explicit sell rules.
+It sends Telegram alerts when estimated edge is at least `10%`. It can optionally auto-buy one edge signal, and it can separately auto-sell manually selected positions from explicit sell rules.
 
 ## Endpoint
 
@@ -44,7 +44,8 @@ Use this only when you missed the previous-day HKO forecast cache.
 7. Compare prices with monthly baseline probabilities.
 8. Send Telegram with the check result.
 9. If `bet` is `BUY_YES` or `BUY_NO`, send the actionable edge message to the optional second Telegram chat.
-10. Read optional sell rules and sell matching existing positions only when `AUTO_SELL_ENABLED=true`.
+10. Buy once for that `date + event + side` only when `AUTO_BUY_ENABLED=true`.
+11. Read optional sell rules and sell matching existing positions only when `AUTO_SELL_ENABLED=true`.
 
 ## Checking Logic
 
@@ -67,20 +68,34 @@ Market matching:
 - If no exact market exists, try the nearest supported bucket that contains the HKO forecast, for example `31°C or higher`.
 - If no matching market or usable baseline exists, the endpoint returns `bet: "NONE"` with a `reason`.
 
-## Action Rules
+## Buy Rules
 
-The edge logic only suggests buys. It does not auto-buy.
+Auto-buy is separate from auto-sell.
 
-Use these manual order rules when reading the Telegram message:
+Live buying only runs when:
+
+```text
+AUTO_BUY_ENABLED=true
+```
+
+Buy criteria:
 
 - Only consider `BUY_YES` or `BUY_NO` when edge is at least `EDGE_THRESHOLD`, currently `0.10` unless changed in Vercel.
 - Only send actionable buy alerts when the selected Yes/No price is between `MIN_ACTION_PRICE` and `MAX_ACTION_PRICE`, default `0.25` to `0.85`.
 - Check spread, liquidity, and market question before placing any manual order.
 - For bucket markets such as `31°C or higher`, make sure the baseline source is `monthly_bucket_baseline` or `all_months_bucket_baseline`, not `bucket_baseline_unavailable`.
 
+Buy records live in Vercel Blob:
+
+```text
+trade-rules/buy-records.json
+```
+
+The duplicate key is `date|eventSlug|BUY_YES/BUY_NO`, so repeated cron calls will not buy the same signal twice. Auto-buy does not create any sell rule.
+
 ## Auto-Sell
 
-Auto-sell is separate from buy alerts. Use it for half-manual mode: you buy manually, then the bot monitors price and sells when a rule target is reached.
+Auto-sell is controlled only by the sell list. Use it for half-manual mode: you buy manually or via auto-buy, then the bot sells only positions that you explicitly add to the sell rules.
 
 Live selling only runs when:
 
@@ -161,6 +176,9 @@ MIN_ACTION_PRICE=0.25
 MAX_ACTION_PRICE=0.85
 BLOB_READ_WRITE_TOKEN=
 AUTO_SELL_ENABLED=false
+AUTO_BUY_ENABLED=false
+AUTO_BUY_SHARES=5
+MIN_AUTO_BUY_USD=1
 POLYMARKET_PRIVATE_KEY=
 POLYMARKET_FUNDER_ADDRESS=
 POLYMARKET_SIGNATURE_TYPE=3
