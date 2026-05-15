@@ -284,7 +284,7 @@ function bucketMarketLabel(bucket) {
 }
 
 function getBucketBaseline(month, direction, threshold) {
-  const minSampleCount = Number(process.env.MIN_BUCKET_SAMPLE_COUNT || "20");
+  const minSampleCount = numberEnv("MIN_BUCKET_SAMPLE_COUNT", 20);
   const thresholdKey = String(threshold);
   const monthly = bucketBaseline.months?.[month]?.[direction]?.[thresholdKey];
   if (monthly?.sample_count >= minSampleCount) {
@@ -352,6 +352,17 @@ async function sellPrice(tokenId) {
 
 function round6(value) {
   return Math.round(value * 1_000_000) / 1_000_000;
+}
+
+function numberEnv(name, fallback) {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function actionPriceRange() {
+  const min = numberEnv("MIN_ACTION_PRICE", 0.25);
+  const max = numberEnv("MAX_ACTION_PRICE", 0.85);
+  return min <= max ? { min, max } : { min: max, max: min };
 }
 
 function priceInActionRange(price, minPrice, maxPrice) {
@@ -457,7 +468,7 @@ function createPolymarketSigner() {
 
 async function createClobClient() {
   const funder = process.env.POLYMARKET_FUNDER_ADDRESS;
-  const signatureType = Number(process.env.POLYMARKET_SIGNATURE_TYPE || "3");
+  const signatureType = numberEnv("POLYMARKET_SIGNATURE_TYPE", 3);
   if (!funder) {
     throw new Error("Missing POLYMARKET_FUNDER_ADDRESS");
   }
@@ -718,6 +729,11 @@ async function runAutoBuy(result, market, { dryRun }) {
       action.reason = "already_recorded";
       return action;
     }
+    if (!Number.isFinite(action.shares) || action.shares <= 0) {
+      action.status = "skipped";
+      action.reason = "invalid_buy_size";
+      return action;
+    }
 
     if (dryRun) {
       action.status = "would_buy";
@@ -801,6 +817,17 @@ async function runAutoSellRules({ dryRun }) {
   const enabled = process.env.AUTO_SELL_ENABLED === "true";
   const actions = [];
   let rulesChanged = false;
+
+  if (!rulesPayload.available) {
+    return {
+      enabled,
+      dryRun,
+      rulesPath: SELL_RULES_PATH,
+      rulesCount: 0,
+      actions,
+      reason: rulesPayload.reason || "sell_rules_unavailable"
+    };
+  }
 
   for (const rule of rules) {
     const action = {
@@ -921,11 +948,12 @@ async function runAutoSellRules({ dryRun }) {
   if (rulesChanged && !dryRun) {
     const latest = await readSellRules();
     const latestRules = Array.isArray(latest.rules) ? latest.rules : [];
-    const mergedRules = rules.map((rule) => {
+    const mergedRulesById = new Map(latestRules.map((rule) => [rule.id, rule]));
+    for (const rule of rules) {
       const latestRule = latestRules.find((item) => item.id === rule.id);
-      return latestRule?.executed ? latestRule : rule;
-    });
-    await writeSellRules({ rules: mergedRules });
+      mergedRulesById.set(rule.id, latestRule?.executed ? latestRule : rule);
+    }
+    await writeSellRules({ rules: [...mergedRulesById.values()] });
   }
 
   if (!dryRun) {
@@ -1010,9 +1038,8 @@ export default async function handler(req, res) {
 
   const queryDate = query.get("date");
   const dryRun = query.get("dryRun") === "1";
-  const edgeThreshold = Number(process.env.EDGE_THRESHOLD || "0.10");
-  const minActionPrice = Number(process.env.MIN_ACTION_PRICE || "0.25");
-  const maxActionPrice = Number(process.env.MAX_ACTION_PRICE || "0.85");
+  const edgeThreshold = numberEnv("EDGE_THRESHOLD", 0.10);
+  const { min: minActionPrice, max: maxActionPrice } = actionPriceRange();
 
   try {
     const forecastInfo = await getForecastForCheck(queryDate);
