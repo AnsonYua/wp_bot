@@ -91,14 +91,7 @@ Buy records live in Vercel Blob:
 trade-rules/buy-records.json
 ```
 
-Order size uses quarter Kelly on a `$10` bankroll by default:
-
-```text
-AUTO_BUY_BANKROLL_USD=10
-AUTO_BUY_KELLY_FRACTION=0.25
-MIN_AUTO_BUY_SHARES=5
-MIN_AUTO_BUY_USD=1
-```
+Order size uses quarter Kelly on a `$10` bankroll, with a `$1` minimum notional guard.
 
 The duplicate key is `date|eventSlug|BUY_YES/BUY_NO`, so repeated cron calls will not buy the same signal twice. Auto-buy does not create any sell rule.
 
@@ -186,10 +179,6 @@ MAX_ACTION_PRICE=0.85
 BLOB_READ_WRITE_TOKEN=
 AUTO_SELL_ENABLED=false
 AUTO_BUY_ENABLED=false
-AUTO_BUY_BANKROLL_USD=10
-AUTO_BUY_KELLY_FRACTION=0.25
-MIN_AUTO_BUY_SHARES=5
-MIN_AUTO_BUY_USD=1
 POLYMARKET_PRIVATE_KEY=
 POLYMARKET_FUNDER_ADDRESS=
 POLYMARKET_SIGNATURE_TYPE=3

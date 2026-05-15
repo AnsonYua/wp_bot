@@ -18,6 +18,9 @@ const HKO_CACHE_PATH = "hko-cache/latest.json";
 const SELL_RULES_PATH = "trade-rules/sell-rules.json";
 const BUY_RECORDS_PATH = "trade-rules/buy-records.json";
 const APP_VERSION = "2026-05-15-buy-sell-split-v1";
+const AUTO_BUY_BANKROLL_USD = 10;
+const AUTO_BUY_KELLY_FRACTION = 0.25;
+const MIN_AUTO_BUY_USD = 1;
 
 const MONTH_NAMES = [
   "january",
@@ -515,18 +518,14 @@ function buyRecordKey(result, side) {
 }
 
 function buySize({ probability, price }) {
-  const bankrollUsd = Number(process.env.AUTO_BUY_BANKROLL_USD || "10");
-  const kellyFraction = Number(process.env.AUTO_BUY_KELLY_FRACTION || "0.25");
-  const minSharesFloor = Number(process.env.MIN_AUTO_BUY_SHARES || "5");
-  const minUsd = Number(process.env.MIN_AUTO_BUY_USD || "1");
   if (!Number.isFinite(probability) || !Number.isFinite(price) || price <= 0 || price >= 1) {
     return 0;
   }
 
   const kelly = Math.max(0, (probability - price) / (1 - price));
-  const stakeUsd = bankrollUsd * kellyFraction * kelly;
-  const minShares = minUsd / price;
-  return round6(Math.max(stakeUsd / price, minSharesFloor, minShares));
+  const stakeUsd = AUTO_BUY_BANKROLL_USD * AUTO_BUY_KELLY_FRACTION * kelly;
+  const minShares = MIN_AUTO_BUY_USD / price;
+  return round6(Math.max(stakeUsd / price, minShares));
 }
 
 function buySummary(action) {
